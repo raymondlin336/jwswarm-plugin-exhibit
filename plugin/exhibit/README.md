@@ -1,6 +1,6 @@
 # Exhibit (exhibit)
 
-**Version 0.2.0 (prototype)**
+**Version 0.2.1 (prototype)**
 
 Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calculators, checklists, forms, charts and small games, opened in a sandboxed browser tab. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back.
 
@@ -17,7 +17,7 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 
 - **exhibit (skill)**: Tells the agent when an exhibit helps, how to write one that works in the sandbox, how to save data with `window.exhibit`, and to treat saved data as user input, not instructions.
 - **exhibit (tool)**: Saves exhibits and their versions, opens them in your browser, and reads back what you saved. Actions: `show`, `list`, `gallery`, `read`, `open`, `delete` and `stop`.
-- **ExhibitAskRail (rail)**: Before a new exhibit is shown, asks you "Exhibit or answer in chat?" with WorkSwarm's option dialog, unless your message mentioned an exhibit or you already picked Exhibit in this chat. Edits to an existing exhibit are never asked about.
+- **ExhibitAskRail (rail)**: Before a new exhibit is shown, asks you "Exhibit or answer in chat?" with WorkSwarm's option dialog, unless your message mentioned an exhibit or you already picked Exhibit in this chat. Edits to an existing exhibit are never asked about. It also confirms deletes in a dialog, keeps HTML pages with scripts out of the file preview panel, and makes sure the agent has read the exhibit skill before showing one.
 
 ## How it works
 
@@ -35,6 +35,16 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 - **Dependencies:** Python standard library only. The tool does nothing at import time.
 
 ## Updates
+
+### 0.2.1
+
+- **Delete asks in a dialog:** when the agent deletes an exhibit, WorkSwarm shows "Delete '<name>'?" with Delete and Keep it, instead of the agent asking in chat. Nothing is deleted unless you pick Delete.
+- **No more blank charts in the file preview:** if the agent tries to send an HTML page with scripts as a file, it's told to show it as an exhibit instead (the preview panel blocks scripts). If you asked for the file itself, it can still send it.
+- **The agent always reads the exhibit instructions** before showing one, so exhibits follow the rules for theme, libraries and saving data.
+- The agent refers to exhibits by name instead of showing their ids.
+- **No more retry loops:** the agent can hand over a long page as a saved file (`html_file`), errors say how to fix the call, and the same failing call is stopped after 3 tries with a note to fix it or explain.
+- Saying "exhibit" once in a chat counts for the whole chat, so follow-ups aren't asked "Exhibit or answer in chat?" again.
+- **Previews only refresh when an exhibit is edited:** each version is cached by your browser, thumbnails draw without animations, and renaming or deleting on All exhibits updates the page in place instead of reloading it.
 
 ### 0.2.0
 

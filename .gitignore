@@ -1,2 +1,4 @@
 plugin/dist/
 __pycache__/
+# Log output from openjiuwen when tests run with its real package installed
+logs/

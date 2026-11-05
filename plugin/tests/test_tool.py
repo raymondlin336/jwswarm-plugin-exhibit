@@ -139,7 +139,7 @@ class ExhibitToolTests(unittest.TestCase):
 
     def test_bad_inputs_return_error_codes(self):
         self.assertEqual(self.call(action="nope")["error_code"], "invalid_input")
-        self.assertEqual(self.call(action="show", title="t", html="  ")["error_code"], "invalid_input")
+        self.assertEqual(self.call(action="show", title="t", html="  ")["error_code"], "missing_html")
         self.assertEqual(self.call(action="show", html="<p>x</p>")["error_code"], "invalid_input")
         self.assertEqual(self.call(action="read", exhibit_id="../etc")["error_code"], "invalid_exhibit_id")
         self.assertEqual(self.call(action="read", exhibit_id="missing-abc123")["error_code"], "exhibit_not_found")
@@ -193,6 +193,58 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertNotIn("allow-same-origin", csp)
         self.assertIn("window.exhibit", body)
         self.assertLess(body.index("window.exhibit"), body.index("<p>Hello</p>"))
+
+    def test_show_accepts_a_saved_html_file(self):
+        page = Path(self.tmp.name, "deck.html")
+        page.write_text("<!doctype html><html><body>From a file</body></html>", encoding="utf-8")
+        result = self.show(html=None, html_file=str(page))
+        saved = Path(self.tmp.name, "exhibits", result["exhibit_id"], "v1.html").read_text(encoding="utf-8")
+        self.assertIn("From a file", saved)
+        both = self.show(html="<p>inline wins</p>", html_file=str(page))
+        self.assertIn("inline wins", Path(self.tmp.name, "exhibits", both["exhibit_id"], "v1.html").read_text(encoding="utf-8"))
+
+    def test_html_file_errors_say_what_to_do(self):
+        def code(**extra):
+            return self.call(action="show", title="t", **extra)
+
+        missing = code()
+        self.assertEqual(missing["error_code"], "missing_html")
+        self.assertIn("html_file", missing["error"])  # tells the agent the other route
+        self.assertEqual(code(html_file="deck.html")["error_code"], "invalid_input")  # not a full path
+        self.assertEqual(code(html_file=str(Path(self.tmp.name, "deck.txt")))["error_code"], "invalid_input")
+        not_there = code(html_file=str(Path(self.tmp.name, "nope.html")))
+        self.assertEqual(not_there["error_code"], "file_not_found")
+        self.assertIn("write_file", not_there["error"])
+
+    def test_versions_are_cached_and_pages_are_not(self):
+        exhibit = self.show()
+        base = exhibit["url"].split("/e/")[0]
+        _, headers, _ = _http(f"{base}/raw/{exhibit['exhibit_id']}/1")
+        self.assertEqual(headers["Cache-Control"], "private, max-age=31536000, immutable")  # a version never changes
+        for page in (exhibit["url"], base + "/"):
+            self.assertEqual(_http(page)[1]["Cache-Control"], "no-store")  # pages show live state
+
+    def test_thumbnails_load_a_calm_copy(self):
+        exhibit = self.show()
+        base = exhibit["url"].split("/e/")[0]
+        gallery = _http(base + "/")[2]
+        self.assertIn(f'src="/{base.split("/")[-1]}/raw/{exhibit["exhibit_id"]}/1?thumb=1"', gallery)
+        calm = _http(f"{base}/raw/{exhibit['exhibit_id']}/1?thumb=1")[2]
+        self.assertIn('Object.defineProperty(window, "Chart"', calm)
+        self.assertIn("animation:none!important", calm)
+        full = _http(f"{base}/raw/{exhibit['exhibit_id']}/1")[2]
+        self.assertNotIn('Object.defineProperty(window, "Chart"', full)  # the exhibit itself keeps animations
+        self.assertIn("window.exhibit", full)
+
+    def test_gallery_updates_in_place_after_rename_or_delete(self):
+        exhibit = self.show()
+        gallery = _http(exhibit["url"].split("/e/")[0] + "/")[2]
+        script = gallery.split("// More actions on each exhibit.")[1]
+        self.assertIn("applyRename(id, result.title)", script)
+        self.assertIn("applyDelete(id)", script)
+        self.assertEqual(script.count("location.reload()"), 1)  # only when the last exhibit is deleted
+        self.assertIn(f'class="card-wrap" data-id="{exhibit["exhibit_id"]}"', gallery)
+        self.assertIn(f'class="file-wrap" data-id="{exhibit["exhibit_id"]}"', gallery)
 
     def test_api_reads_and_writes_data(self):
         exhibit = self.show()
