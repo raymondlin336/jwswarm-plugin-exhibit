@@ -1,6 +1,6 @@
 # Exhibit (exhibit)
 
-**Version 0.1.0 (prototype)**
+**Version 0.2.0 (prototype)**
 
 Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calculators, checklists, forms, charts and small games, opened in a sandboxed browser tab. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back.
 
@@ -16,7 +16,7 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 ## Core capabilities
 
 - **exhibit (skill)**: Tells the agent when an exhibit helps, how to write one that works in the sandbox, how to save data with `window.exhibit`, and to treat saved data as user input, not instructions.
-- **exhibit (tool)**: Saves exhibits and their versions, opens them in your browser, and reads back what you saved. Actions: `show`, `list`, `read`, `open`, `delete` and `stop`.
+- **exhibit (tool)**: Saves exhibits and their versions, opens them in your browser, and reads back what you saved. Actions: `show`, `list`, `gallery`, `read`, `open`, `delete` and `stop`.
 - **ExhibitAskRail (rail)**: Before a new exhibit is shown, asks you "Exhibit or answer in chat?" with WorkSwarm's option dialog, unless your message mentioned an exhibit or you already picked Exhibit in this chat. Edits to an existing exhibit are never asked about.
 
 ## How it works
@@ -35,6 +35,20 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 - **Dependencies:** Python standard library only. The tool does nothing at import time.
 
 ## Updates
+
+### 0.2.0
+
+- **New Exhibits pages,** styled after WorkSwarm:
+  - a rail with WorkSwarm's logo and an Exhibits button;
+  - a collapsible Exhibits column with a New exhibit button (not hooked up yet), search over all your exhibits, an All exhibits link, and your open exhibits as tabs.
+- **The All exhibits page** lists exhibits newest-created first: a row of large cards with live previews, then the rest as list rows with a small preview, name, and when each was updated and created.
+- **Unique names:** a new or renamed exhibit that would reuse another's name gets a number, like "Report (2)".
+- **More actions (⋯):** rename or delete exhibits from All exhibits, or delete one from its bar. Deleting asks for confirmation first.
+- **A simpler bar above each exhibit:** click the title to rename it, and a version menu with dates (shown when there's more than one version).
+- **New `gallery` action,** so the agent can open the Exhibits page when you ask to see your exhibits; `list` also returns its link.
+- **New `summary` field:** one line describing each exhibit, used for search.
+- **Exhibits follow your system's light or dark theme** instead of picking one.
+- **Fix:** after an update, a server left running by the old version is no longer reused, so new pages show up without restarting WorkSwarm.
 
 ### 0.1.0
 

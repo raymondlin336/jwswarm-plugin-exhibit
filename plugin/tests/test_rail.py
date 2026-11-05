@@ -82,6 +82,16 @@ def _load_module():
 MOD = _load_module()
 
 
+def _decision(raw):
+    """Normalize a decision from the stand-ins or from the real openjiuwen classes."""
+    kind = getattr(raw, "kind", None) or {
+        "ApproveResult": "approve", "RejectResult": "reject", "InterruptResult": "interrupt",
+    }[type(raw).__name__]
+    return types.SimpleNamespace(
+        kind=kind, request=getattr(raw, "request", None), tool_result=getattr(raw, "tool_result", None)
+    )
+
+
 class FakeSession:
     def __init__(self):
         self.state = {}
@@ -119,10 +129,11 @@ class ExhibitAskRailTests(unittest.TestCase):
 
     def resolve(self, user_input=None, **args):
         call = FakeToolCall(**(args or SHOW_NEW))
-        return asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), call, user_input))
+        return _decision(asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), call, user_input)))
 
     def test_watches_only_the_exhibit_tool(self):
-        self.assertEqual(self.rail.tool_names, {"exhibit"})
+        names = self.rail.get_tools() if hasattr(self.rail, "get_tools") else self.rail.tool_names
+        self.assertEqual(set(names), {"exhibit"})
 
     def test_runs_before_the_permission_rail(self):
         # WorkSwarm's permission rail has priority 90 and denies any resume answer it finds.
@@ -140,7 +151,7 @@ class ExhibitAskRailTests(unittest.TestCase):
         ):
             ctx = FakeCtx(self.session)
             ctx.extra = {key: carrier}
-            decision = asyncio.run(self.rail.resolve_interrupt(ctx, call, {"a": "Exhibit"}))
+            decision = _decision(asyncio.run(self.rail.resolve_interrupt(ctx, call, {"a": "Exhibit"})))
             self.assertEqual(decision.kind, "approve")
             self.assertNotIn(key, ctx.extra)
 

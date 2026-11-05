@@ -94,6 +94,27 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIsNotNone(MOD.ToolExposure)
         self.assertEqual(self.tool.card.exposure, MOD.ToolExposure.DIRECT)
 
+    def test_duplicate_names_get_numbered(self):
+        first = self.show(title="Benchmark results")
+        second = self.show(title="Benchmark results")
+        third = self.show(title="benchmark RESULTS")  # case doesn't matter
+        self.assertEqual(first["title"], "Benchmark results")
+        self.assertEqual(second["title"], "Benchmark results (2)")
+        self.assertEqual(third["title"], "benchmark RESULTS (3)")
+        again = self.show(title="Benchmark results (2)")  # no "(2) (2)"
+        self.assertEqual(again["title"], "Benchmark results (4)")
+        # A new version keeping its own title isn't renumbered.
+        kept = self.show(exhibit_id=second["exhibit_id"], title="Benchmark results (2)", html="<p>v2</p>")
+        self.assertEqual(kept["title"], "Benchmark results (2)")
+        # Renaming onto a taken name is numbered too; renaming to its own name isn't.
+        self.assertEqual(MOD._rename_exhibit(first["exhibit_id"], "Benchmark results (3)")["title"], "Benchmark results (5)")
+        self.assertEqual(MOD._rename_exhibit(second["exhibit_id"], "Benchmark results (2)")["title"], "Benchmark results (2)")
+        self.assertEqual(MOD._rename_exhibit(second["exhibit_id"], "Something new")["title"], "Something new")
+        long_title = "x" * MOD._MAX_TITLE_CHARS
+        self.show(title=long_title)
+        numbered = self.show(title=long_title)["title"]
+        self.assertTrue(numbered.endswith(" (2)") and len(numbered) == MOD._MAX_TITLE_CHARS)
+
     def test_show_creates_exhibit_and_wraps_body_html(self):
         result = self.show()
         self.assertEqual(result["version"], 1)
@@ -208,6 +229,214 @@ class ExhibitToolTests(unittest.TestCase):
         second = self.call(action="open", exhibit_id=first["exhibit_id"])
         self.assertTrue(second["success"], second)
         self.assertEqual(_http(second["url"])[0], 200)
+
+    def test_column_lists_open_tabs_newest_first_with_new_button_and_search(self):
+        first, second = self.show(title="First one"), self.show(title="Second one")
+        status, _, body = _http(first["url"])
+        self.assertEqual(status, 200)
+        self.assertIn('id="new-exhibit"', body)
+        self.assertIn('<input id="q" type="search"', body)
+        self.assertLess(body.index(f'data-close="{second["exhibit_id"]}"'), body.index(f'data-close="{first["exhibit_id"]}"'))
+        self.assertIn('class="row on"', body)  # the open exhibit is highlighted
+        self.assertIn('"title": "Second one"', body)  # all exhibits embedded for search
+
+    def test_panel_collapsed_state_is_remembered(self):
+        exhibit = self.show()
+        base = exhibit["url"].split("/e/")[0]
+        put = json.dumps({"op": "panel", "collapsed": True}).encode()
+        self.assertEqual(_http(base + "/api/tabs", "PUT", put, {"Content-Type": "application/json", "Origin": "null"})[0], 403)
+        self.assertEqual(_http(base + "/api/tabs", "PUT", put, {"Content-Type": "application/json"})[0], 200)
+        self.assertIn('<body class="collapsed">', _http(base + "/")[2])
+        put = json.dumps({"op": "panel", "collapsed": False}).encode()
+        _http(base + "/api/tabs", "PUT", put, {"Content-Type": "application/json"})
+        self.assertIn('<body class="">', _http(base + "/")[2])
+
+    def test_titles_cannot_break_out_of_the_inline_config(self):
+        exhibit = self.show(title="</script><script>alert(1)</script>")
+        body = _http(exhibit["url"])[2]
+        self.assertNotIn("</script><script>alert(1)", body)
+
+    def test_viewer_bar_has_editable_title_and_version_menu(self):
+        exhibit = self.show(summary="Not shown in the bar")
+        body = _http(exhibit["url"])[2]
+        self.assertIn('<input class="title-input" id="title" value="Test exhibit"', body)
+        self.assertNotIn("Not shown in the bar", body.split("<main")[1].split("<script")[0])
+        self.assertNotIn("Sandboxed", body)
+        self.assertNotIn('id="ver-btn"', body)  # a single version has nothing to pick
+        for n in (2, 3):
+            self.show(exhibit_id=exhibit["exhibit_id"], title=None, html=f"<p>v{n}</p>")
+        latest = _http(exhibit["url"])[2]
+        self.assertIn("Version 3 of 3", latest)
+        self.assertIn('<span class="latest">Latest</span>', latest)
+        self.assertNotIn('class="ver-btn old"', latest)
+        older = _http(exhibit["url"] + "?v=1")[2]
+        self.assertIn("Version 1 of 3", older)
+        self.assertIn('class="ver-btn old"', older)  # stands out when not on the latest
+
+    def test_delete_api_needs_confirm_and_same_origin(self):
+        keep, gone = self.show(title="Keep"), self.show(title="Gone")
+        base = gone["url"].split("/e/")[0]
+        url = f"{base}/api/{gone['exhibit_id']}/delete"
+
+        def delete(body, headers=None):
+            return _http(url, "PUT", json.dumps(body).encode(), {"Content-Type": "application/json", **(headers or {})})
+
+        self.assertEqual(delete({"confirm": True}, {"Origin": "null"})[0], 403)
+        self.assertEqual(delete({})[0], 400)  # no confirm, nothing deleted
+        self.assertEqual(delete({"confirm": "yes"})[0], 400)
+        self.assertTrue(Path(self.tmp.name, "exhibits", gone["exhibit_id"]).is_dir())
+        status, _, text = delete({"confirm": True})
+        self.assertEqual((status, json.loads(text)["tabs"]), (200, [keep["exhibit_id"]]))
+        self.assertFalse(Path(self.tmp.name, "exhibits", gone["exhibit_id"]).exists())
+        self.assertEqual(delete({"confirm": True})[0], 404)
+
+    def test_more_actions_buttons(self):
+        exhibit = self.show(title="Q1 <plan>")
+        base = exhibit["url"].split("/e/")[0]
+        gallery = _http(base + "/")[2]
+        self.assertEqual(gallery.count(f'class="more-btn" type="button" data-id="{exhibit["exhibit_id"]}"'), 2)  # card + row
+        self.assertIn('data-title="Q1 &lt;plan&gt;"', gallery)  # escaped
+        self.assertIn('{ label: "Rename"', gallery)
+        self.assertIn('id="item-menu"', gallery)
+        self.assertIn('id="modal"', gallery)
+        viewer = _http(exhibit["url"])[2]
+        self.assertIn('id="exhibit-more"', viewer)
+        self.assertNotIn('label: "Rename"', viewer)  # only delete in the exhibit bar
+
+    def test_rename_api(self):
+        exhibit = self.show()
+        base = exhibit["url"].split("/e/")[0]
+        url = f"{base}/api/{exhibit['exhibit_id']}/title"
+
+        def rename(title, headers=None):
+            body = json.dumps({"title": title}).encode()
+            return _http(url, "PUT", body, {"Content-Type": "application/json", **(headers or {})})
+
+        self.assertEqual(rename("Hijacked", {"Origin": "null"})[0], 403)
+        self.assertEqual(rename("   ")[0], 400)
+        status, _, text = rename("  Benchmark   scores by app ")
+        self.assertEqual((status, json.loads(text)["title"]), (200, "Benchmark scores by app"))
+        self.assertEqual(MOD._load_meta(exhibit["exhibit_id"])["title"], "Benchmark scores by app")
+        self.assertEqual(len(json.loads(rename("x" * 500)[2])["title"]), MOD._MAX_TITLE_CHARS)
+        self.assertEqual(len(MOD._load_meta(exhibit["exhibit_id"])["versions"]), 1)  # no new version
+
+    def test_gallery_action_returns_the_exhibits_page(self):
+        self.show(summary="Shown in the gallery")
+        result = self.call(action="gallery")
+        self.assertTrue(result["success"], result)
+        self.assertFalse(result["opened"])  # browser disabled in tests
+        status, _, body = _http(result["url"])
+        self.assertEqual(status, 200)
+        self.assertIn("Shown in the gallery", body)
+        self.assertEqual(self.call(action="list")["gallery_url"], result["url"])
+
+    def test_server_from_older_code_is_not_reused(self):
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        def fake_health(build):
+            class Health(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    body = json.dumps({"ok": True, "pid": os.getpid(), **({"build": build} if build else {})}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *args):
+                    pass
+
+            httpd = ThreadingHTTPServer(("127.0.0.1", 0), Health)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            self.addCleanup(httpd.server_close)
+            self.addCleanup(httpd.shutdown)
+            return httpd.server_address[1]
+
+        old_port, same_port = fake_health(None), fake_health(MOD._BUILD)
+        self.assertFalse(MOD._probe(old_port, "token"))  # no build id: an older version
+        self.assertTrue(MOD._probe(same_port, "token"))
+
+        MOD._atomic_write(Path(self.tmp.name, "server.json"),
+                          json.dumps({"port": old_port, "token": "token", "pid": os.getpid()}))
+        url = MOD._ensure_server()
+        self.assertNotIn(f":{old_port}/", url)  # started a fresh server instead
+
+    # Gallery, tabs and summaries ------------------------------------------
+    def test_summary_is_stored_or_derived(self):
+        given = self.show(summary="Scores   for 20 tests")
+        self.assertEqual(MOD._load_meta(given["exhibit_id"])["summary"], "Scores for 20 tests")
+        html = "<h1>Test exhibit</h1><p>Compares three apps across twenty tests</p><script>x()</script>"
+        derived = self.show(html=html)
+        self.assertEqual(MOD._load_meta(derived["exhibit_id"])["summary"], "Compares three apps across twenty tests")
+        updated = self.show(exhibit_id=given["exhibit_id"], title=None, html="<p>v2</p>")
+        self.assertEqual(MOD._load_meta(updated["exhibit_id"])["summary"], "Scores for 20 tests")  # kept
+
+    def test_exhibits_are_sorted_by_created_date(self):
+        older, newer = self.show(title="Older"), self.show(title="Newer")
+        self.show(exhibit_id=older["exhibit_id"], title=None, html="<p>edited later</p>")  # updated, not created
+        listed = [e["exhibit_id"] for e in self.call(action="list")["exhibits"]]
+        self.assertEqual(listed, [newer["exhibit_id"], older["exhibit_id"]])
+
+    def test_show_and_open_add_tabs_and_delete_removes_them(self):
+        first, second = self.show(), self.show(title="Other exhibit")
+        self.assertEqual(MOD._load_tabs(), [first["exhibit_id"], second["exhibit_id"]])
+        self.call(action="open", exhibit_id=first["exhibit_id"])
+        self.assertEqual(MOD._load_tabs(), [first["exhibit_id"], second["exhibit_id"]])  # no duplicates
+        self.call(action="delete", exhibit_id=first["exhibit_id"], confirm=True)
+        self.assertEqual(MOD._load_tabs(), [second["exhibit_id"]])
+
+    def test_gallery_shows_cards_with_thumbnails_and_rail(self):
+        exhibit = self.show(summary="A short description")
+        MOD._apply_data_op(exhibit["exhibit_id"], {"op": "set", "key": "k", "value": 1})
+        base = exhibit["url"].split("/e/")[0]
+        status, headers, body = _http(base + "/")
+        self.assertEqual(status, 200)
+        self.assertIn("a short description", body)  # searchable, though not shown
+        self.assertNotIn('class="desc"', body)
+        self.assertNotIn("version", body.split("<main>")[1].split("<script")[0].lower())  # no version counts
+        self.assertIn("Updated ", body)
+        self.assertIn("<br>Created ", body)
+        self.assertIn('class="card"', body)
+        self.assertIn('class="file-row"', body)  # every exhibit also has a list row
+        self.assertNotIn("Today<", body)  # no time-based groups
+        self.assertNotIn("<h1>", body)  # no page title
+        self.assertNotIn("More exhibits", body)
+        self.assertNotRegex(body, r'class="ico[ "]')  # no letter icons (icon-btn is a button)
+        self.assertNotIn('id="expand"', body)  # collapsed column comes back via the rail only
+        self.assertIn(f'data-close="{exhibit["exhibit_id"]}"', body)  # open as a tab in the rail
+        self.assertIn('class="thumb"><iframe loading="lazy"', body)
+        self.assertIn('class="nav-row on"', body)  # All exhibits link, current page
+        self.assertNotIn("allow-same-origin", body)
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+
+    def test_tabs_api_closes_and_refuses_cross_site(self):
+        exhibit = self.show()
+        base = exhibit["url"].split("/e/")[0]
+        body = json.dumps({"op": "close", "id": exhibit["exhibit_id"]}).encode()
+        self.assertEqual(_http(base + "/api/tabs", "PUT", body, {"Content-Type": "application/json", "Origin": "null"})[0], 403)
+        self.assertEqual(MOD._load_tabs(), [exhibit["exhibit_id"]])
+        status, _, text = _http(base + "/api/tabs", "PUT", body, {"Content-Type": "application/json"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(text)["tabs"], [])
+        self.assertEqual(_http(exhibit["url"])[0], 200)  # visiting reopens the tab
+        self.assertEqual(MOD._load_tabs(), [exhibit["exhibit_id"]])
+
+    def test_logo_route_serves_svg_or_404(self):
+        base = self.show()["url"].split("/e/")[0]
+        status, headers, _ = _http(base + "/logo.svg")
+        if MOD._workswarm_logo() is None:
+            self.assertEqual(status, 404)
+        else:
+            self.assertEqual((status, headers["Content-Type"]), (200, "image/svg+xml"))
+            self.assertIn("default-src 'none'", headers["Content-Security-Policy"])
+
+    def test_stamp_shows_local_date_and_time(self):
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime(2026, 11, 5, 18, 0, tzinfo=timezone.utc)
+        self.assertRegex(MOD._stamp(now.isoformat(), now), r"^[A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d\d (AM|PM)$")
+        self.assertRegex(MOD._stamp((now - timedelta(days=400)).isoformat(), now), r", 20\d\d, ")  # older years
+        self.assertEqual(MOD._stamp("not a date"), "")
 
 
 if __name__ == "__main__":
