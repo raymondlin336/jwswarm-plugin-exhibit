@@ -17,6 +17,7 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 
 - **exhibit (skill)**: Tells the agent when an exhibit helps, how to write one that works in the sandbox, how to save data with `window.exhibit`, and to treat saved data as user input, not instructions.
 - **exhibit (tool)**: Saves exhibits and their versions, opens them in your browser, and reads back what you saved. Actions: `show`, `list`, `read`, `open`, `delete` and `stop`.
+- **ExhibitAskRail (rail)**: Before a new exhibit is shown, asks you "Exhibit or answer in chat?" with WorkSwarm's option dialog, unless your message mentioned an exhibit or you already picked Exhibit in this chat. Edits to an existing exhibit are never asked about.
 
 ## How it works
 
@@ -37,4 +38,7 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 
 ### 0.1.0
 
-- Initial prototype: one tool and one skill for interactive, sandboxed exhibits with versions and saved data.
+- First working release, tested end to end in WorkSwarm 0.2.7.
+- **exhibit tool:** interactive, sandboxed exhibits with versions and saved data, opened in your browser. It's always visible to the agent, which tells it to use this tool instead of the preview panel for interactive HTML.
+- **ExhibitAskRail:** asks "Exhibit or answer in chat?" before a new exhibit you didn't ask for, with the agent's description of the chat alternative.
+- **exhibit skill:** when an exhibit helps, how to write one that works in the sandbox, and how to report results honestly.

@@ -10,8 +10,10 @@ description: Build exhibits, self-contained HTML pages, with the exhibit tool an
 Give the user a working exhibit, not a description of one. An exhibit is one interactive HTML page that keeps its versions and saved data.
 
 - Write one self-contained HTML document per exhibit and show it with the `exhibit` tool.
+- Don't save it with `write_file` and hand it over with `send_file_to_user`: WorkSwarm's file preview panel blocks scripts, so charts, buttons and saved data don't work there. If the user asks for the HTML file itself, you can send it too, but show the working version as an exhibit.
 - Make it work on the first try: test your logic mentally, handle empty states, and avoid console errors.
-- Report the `url` the tool returns, and say the exhibit opened in their browser (or give the link if `opened` is false).
+- Always give the user the `url` the tool returns as a link, so they can open the exhibit again later. Say it opened in their browser only if the result has `"opened": true`.
+- Only say an exhibit exists if the result has `"success": true` and a `url`. Any other result (an error, or text such as `[PERMISSION_DENIED]` or `[USER_CHOSE_CHAT]`) means nothing was shown: tell the user plainly instead of describing the exhibit as if it worked.
 
 ## Workflow
 
@@ -26,30 +28,23 @@ HTML is your most precise visual medium and the easiest to revise. An exhibit fi
 
 Skip it for short answers, and when the user wants a file in their project or in a specific format (for example a .docx or a .png).
 
-### 2. Ask first unless the user was explicit
+### 2. The user may be asked automatically
 
-- **Don't ask** when the user explicitly asks for an exhibit, or asks to change, reopen or read an existing one. Go straight to the tool.
-- **Ask** when an exhibit would fit but the user didn't ask for one. Call `ask_user` with one single-select question before building anything, recommended option first:
+Don't ask the user yourself whether they want an exhibit; just build it. When you `show` a new exhibit and the user didn't mention one, WorkSwarm asks them "Exhibit or answer in chat?" before it's shown. Edits to an existing exhibit are never asked about.
 
-```json
-{
-  "query": "Should I make this an exhibit or answer in chat?",
-  "questions": [
-    {
-      "question": "Should I make this an exhibit or answer in chat?",
-      "header": "Format",
-      "options": [
-        {"label": "Exhibit", "description": "An interactive page in your browser that I can update and that keeps what you enter"},
-        {"label": "Answer in chat", "description": "Text, a table or a file here in the conversation"}
-      ]
-    }
-  ]
-}
-```
+With every new `show`, pass `chat_alternative`: the concrete thing you'd give instead of an exhibit, in a few words and in the user's language. It appears under "Answer in chat", so make it specific to this request rather than generic, and name the file format when it's a file. Pick a format WorkSwarm's file preview shows well:
 
-- Put whichever option you'd recommend first. Name the regular medium concretely when it's clear (for example "Table in chat" or "Image").
-- Follow the user's choice, and don't ask again for follow-ups on the same request.
-- If `ask_user` isn't available, ask the same question in one short sentence and wait for the answer.
+- **Charts and diagrams:** SVG (sharp at any size, text stays exact) or PNG.
+- **Documents and reports:** PDF or Word (.docx).
+- **Data:** a Markdown table in the message, or Excel (.xlsx) for anything large or that they'll keep working on.
+- **Slides:** PowerPoint (.pptx).
+
+For example "A bar chart of the scores as an SVG image", "A PDF report with the summary table", "A Markdown table of the 20 tests with totals" or "An Excel sheet with one row per test". Plain text is rarely the right alternative for a visual or interactive request.
+
+- If they pick Exhibit, the call goes through as normal.
+- If the result starts with `[USER_CHOSE_CHAT]`, nothing was shown: give them the alternative you offered, in chat, and don't call `exhibit` again for that request.
+- If the result starts with `[USER_CANCELLED]`, they dismissed the question: nothing was shown, so reply briefly in chat and don't call `exhibit` again for that request.
+- If the result starts with `[USER_REPLIED]`, they answered in their own words: follow what they said.
 
 ### 3. Write the exhibit
 
@@ -81,7 +76,7 @@ await exhibit.clear();
 
 ### 5. Show it
 
-`{"action": "show", "title": "Trip packing list", "html": "<!doctype html>..."}`
+`{"action": "show", "title": "Trip packing list", "html": "<!doctype html>...", "chat_alternative": "A packing checklist as a Markdown list"}`
 
 To change an exhibit, send the full new HTML with its `exhibit_id`. This adds a new version and keeps the saved data:
 

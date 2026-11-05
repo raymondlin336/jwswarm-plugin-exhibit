@@ -1,6 +1,7 @@
 """Tests for the exhibit tool. Run with: python -m unittest discover plugin/tests"""
 
 import asyncio
+import enum
 import importlib.util
 import json
 import os
@@ -24,16 +25,23 @@ def _install_openjiuwen_stand_in() -> None:
         def __init__(self, card):
             self.card = card
 
+    class ToolExposure(str, enum.Enum):
+        DIRECT = "direct"
+        DEFERRED = "deferred"
+
     module = types.ModuleType("openjiuwen.core.foundation.tool")
     module.Tool = Tool
     module.ToolCard = ToolCard
+    module.ToolExposure = ToolExposure
     for name in ("openjiuwen", "openjiuwen.core", "openjiuwen.core.foundation"):
         sys.modules.setdefault(name, types.ModuleType(name))
     sys.modules["openjiuwen.core.foundation.tool"] = module
 
 
 def _load_module():
-    if importlib.util.find_spec("openjiuwen") is None:
+    try:
+        importlib.import_module("openjiuwen.core.foundation.tool")
+    except Exception:  # noqa: BLE001 - no real openjiuwen here (or another test's stand-in)
         _install_openjiuwen_stand_in()
     spec = importlib.util.spec_from_file_location("exhibit_tool", TOOL_FILE)
     module = importlib.util.module_from_spec(spec)
@@ -80,6 +88,11 @@ class ExhibitToolTests(unittest.TestCase):
     def test_card_lists_all_actions(self):
         self.assertEqual(self.tool.card.name, "exhibit")
         self.assertEqual(self.tool.card.input_params["properties"]["action"]["enum"], list(MOD._ACTIONS))
+
+    def test_card_is_directly_visible(self):
+        # Progressive tool loading hides tools that don't declare an exposure.
+        self.assertIsNotNone(MOD.ToolExposure)
+        self.assertEqual(self.tool.card.exposure, MOD.ToolExposure.DIRECT)
 
     def test_show_creates_exhibit_and_wraps_body_html(self):
         result = self.show()

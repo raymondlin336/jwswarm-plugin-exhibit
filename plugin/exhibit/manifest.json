@@ -65,5 +65,19 @@
         "zh": "保存展品及其各个版本，在沙盒浏览器标签页中打开，并读回用户保存的内容。"
       }
     }
+  ],
+  "rails": [
+    {
+      "file": "rails/exhibit_ask_rail.py",
+      "class": "ExhibitAskRail",
+      "display_name": {
+        "en": "Exhibit Format Check",
+        "zh": "展品形式确认"
+      },
+      "display_description": {
+        "en": "Before a new exhibit is shown, asks whether you want an exhibit or an answer in chat, unless you asked for an exhibit.",
+        "zh": "在展示新展品前，询问你想要展品还是在对话中回答；如果你已明确要求展品则不再询问。"
+      }
+    }
   ]
 }

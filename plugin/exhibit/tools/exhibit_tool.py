@@ -23,6 +23,16 @@ from urllib.parse import parse_qs, urlsplit
 
 from openjiuwen.core.foundation.tool import Tool, ToolCard
 
+try:
+    from openjiuwen.core.foundation.tool import ToolExposure
+except ImportError:  # older openjiuwen without progressive tool loading
+    ToolExposure = None
+
+# With progressive tool loading on (WorkSwarm's default), tools that don't declare
+# an exposure are hidden behind tool_search, and the agent never sees this tool.
+# An explicit value always wins, so declare it directly visible.
+_CARD_EXPOSURE: dict[str, Any] = {"exposure": ToolExposure.DIRECT} if ToolExposure is not None else {}
+
 _MAX_HTML_BYTES = 2_000_000
 _MAX_DATA_BYTES = 1_000_000
 _MAX_READ_CHARS = 100_000
@@ -571,6 +581,7 @@ class ExhibitTool(Tool):
             ToolCard(
                 id="exhibit",
                 name="exhibit",
+                **_CARD_EXPOSURE,
                 description=(
                     "Creates or updates an exhibit: a self-contained HTML page you write, shown to the user in a "
                     "sandboxed browser tab, with versions and saved data. HTML is your most precise visual medium "
@@ -583,10 +594,11 @@ class ExhibitTool(Tool):
                     "Calculations in an exhibit run in code, so it suits requests where the user will change "
                     "inputs or needs exact numbers. Skip it for short answers, or when the user wants a file in "
                     "their project or a specific format. "
-                    "When to ask first: if the user explicitly asks for an exhibit, or is asking to change or "
-                    "reopen an existing one, use this tool without asking. Otherwise, when an exhibit would fit "
-                    "but the user hasn't asked for one, first call ask_user with a single-select question "
-                    "offering an exhibit or a regular answer in chat, and follow their choice. "
+                    "Don't ask the user whether they want an exhibit: when you show a new one they didn't ask "
+                    "for, they are asked automatically. If the result says [USER_CHOSE_CHAT], answer in chat "
+                    "and don't call exhibit again for that request. "
+                    "Use this tool, not write_file plus send_file_to_user, to show interactive HTML: the file "
+                    "preview panel blocks scripts, so charts and buttons there stay blank. "
                     'Before your first call, load its instructions by calling skill_tool with skill_name "exhibit". '
                     "Exhibits can't reach the internet except approved script CDNs, so they can't call real APIs; "
                     "they save data only through window.exhibit. Use action read to see what the user saved. "
@@ -608,6 +620,16 @@ class ExhibitTool(Tool):
                         "html": {
                             "type": "string",
                             "description": "Full HTML document, or body HTML to wrap. Used by show.",
+                        },
+                        "chat_alternative": {
+                            "type": "string",
+                            "description": (
+                                "With show for a new exhibit: the concrete non-exhibit version you would give "
+                                "instead, in a few words, in the user's language, naming the file format when "
+                                "it's a file (e.g. 'A static bar chart of the scores as an SVG image', 'A PDF "
+                                "report with the summary table', 'A Markdown table with totals'). The user may "
+                                "be shown it as the alternative to the exhibit."
+                            ),
                         },
                         "exhibit_id": {
                             "type": "string",
