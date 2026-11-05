@@ -1,0 +1,69 @@
+{
+  "version": "0.1.0",
+  "package_type": "plugin",
+  "id": "exhibit",
+  "name": "Exhibit",
+  "description": "Shows interactive exhibits the agent writes (dashboards, calculators, checklists, charts) in a sandboxed browser tab, with versions and saved data.",
+  "display_name": {
+    "en": "Exhibit",
+    "zh": "展品"
+  },
+  "display_description": {
+    "en": "Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calculators, checklists, forms, charts and small games, opened in a sandboxed browser tab. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back. Exhibits can't reach the internet or your files. Version 0.1.0 prototype.",
+    "zh": "版本 0.1.0 原型。让 WorkSwarm 为你制作展品：可交互的页面，如仪表盘、计算器、清单、表单、图表和小游戏，并在沙盒浏览器标签页中打开。展品会保留各个版本，并能保存你填写的内容，WorkSwarm 可以读回这些内容。展品无法访问互联网或你的文件。"
+  },
+  "category": "Engineering",
+  "source": "local",
+  "default_init_input": {
+    "en": "Make me an interactive monthly budget planner I can fill in.",
+    "zh": "帮我做一个可以填写的交互式月度预算规划页面。"
+  },
+  "tags": [
+    {
+      "en": "Interactive Pages",
+      "zh": "交互页面"
+    },
+    {
+      "en": "Visualization",
+      "zh": "可视化"
+    },
+    {
+      "en": "Productivity",
+      "zh": "效率"
+    }
+  ],
+  "quick_inputs": [
+    {
+      "en": "Make me an interactive monthly budget planner I can fill in.",
+      "zh": "帮我做一个可以填写的交互式月度预算规划页面。"
+    },
+    {
+      "en": "Build a packing checklist for my trip that remembers what I've checked off.",
+      "zh": "为我的旅行做一个打包清单，并记住我勾选了哪些。"
+    },
+    {
+      "en": "Turn this table into an interactive chart I can filter.",
+      "zh": "把这个表格变成一个可以筛选的交互式图表。"
+    }
+  ],
+  "skills": [
+    {
+      "dir": "./skills/exhibit",
+      "mode": "all"
+    }
+  ],
+  "tools": [
+    {
+      "file": "tools/exhibit_tool.py",
+      "class": "ExhibitTool",
+      "display_name": {
+        "en": "Exhibit Tool",
+        "zh": "展品工具"
+      },
+      "display_description": {
+        "en": "Saves exhibits and their versions, opens them in a sandboxed browser tab and reads back what the user saved.",
+        "zh": "保存展品及其各个版本，在沙盒浏览器标签页中打开，并读回用户保存的内容。"
+      }
+    }
+  ]
+}
