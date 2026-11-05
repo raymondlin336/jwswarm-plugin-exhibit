@@ -49,15 +49,15 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 ### 0.2.0
 
 - **New Exhibits pages,** styled after WorkSwarm:
-  - a rail with WorkSwarm's logo and an Exhibits button;
-  - a collapsible Exhibits column with a New exhibit button (not hooked up yet), search over all your exhibits, an All exhibits link, and your open exhibits as tabs.
+  - a rail with WorkSwarm's logo and an Exhibits button, so integration with WorkSwarm UI down the road would be easier.
+  - a collapsible Exhibits column with buttons for All Exhibits, creating a new exhibit (not hooked up), and searching for an exhibit.
 - **The All exhibits page** lists exhibits newest-created first: a row of large cards with live previews, then the rest as list rows with a small preview, name, and when each was updated and created.
-- **Unique names:** a new or renamed exhibit that would reuse another's name gets a number, like "Report (2)".
-- **More actions (⋯):** rename or delete exhibits from All exhibits, or delete one from its bar. Deleting asks for confirmation first.
-- **A simpler bar above each exhibit:** click the title to rename it, and a version menu with dates (shown when there's more than one version).
+- **More actions (⋯):** rename or delete exhibits from All exhibits.
+- **A simpler bar above each exhibit:** added UI for renaming, deleting, and past versions.
 - **New `gallery` action,** so the agent can open the Exhibits page when you ask to see your exhibits; `list` also returns its link.
 - **New `summary` field:** one line describing each exhibit, used for search.
-- **Exhibits follow your system's light or dark theme** instead of picking one.
+- **Exhibits follow your system's light or dark theme** at the time of creation.
+
 - **Fix:** after an update, a server left running by the old version is no longer reused, so new pages show up without restarting WorkSwarm.
 
 ### 0.1.0
