@@ -1,0 +1,341 @@
+<!doctype html>
+<!--
+PRESET slides v3. A 16:9 slide deck: presentation, pitch, briefing, lesson, workshop.
+
+How to use it:
+- Keep the <style> block, the notes panel and the <script> at the end as they are. To restyle,
+  change only the variables on :root (and their dark and print copies).
+- Don't add buttons or scripts for moving between slides: Exhibit adds its own to every deck.
+- Set <html lang> to the user's language and set <title>.
+- Replace the sample slides with yours: one <section class="slide ..."> per slide, in order.
+  Replace every sample sentence and number; slide numbers update themselves.
+- Write each headline as the point of the slide ("Weekend tickets wait twice as long"), not a topic
+  label ("Weekend data"). Put detail the speaker needs, but the audience doesn't, in the notes.
+- Usually a title slide, the content, and a closing slide with the ask or next steps.
+
+Fitting text: a slide has a fixed size. When a slide's content doesn't fit, the page shrinks that
+slide's text, down to 60% of normal size; past that, the slide scrolls. Text never gets cut off,
+but small text is hard to read on a screen, so split a crowded slide into two. Roughly what fits
+at full size (a bullet that wraps takes two or more lines; a takeaway line takes about two):
+- Full width (<ul>, <ol>, <p>): about 10 lines of about 70 characters.
+- Two columns: about 7 lines of about 28 characters in each.
+- Three columns: about 7 lines of about 15 characters in each, so a few words a bullet.
+- Big numbers: values up to about 6 characters (38%, 4.2 h, $1.2M); put words in the label.
+
+Slide layouts (class on the section, after "slide"):
+- title: <p class="eyebrow">, <h1>, <p class="sub">, <p class="by">.
+- divider: starts a part of the talk. <p class="eyebrow">Part 2</p><h2>...</h2>.
+- quote: <blockquote>...</blockquote><p class="cite">Name, role</p>.
+- end: closing slide; <h2> and a short <ol> or <ul> of next steps or the ask.
+- no class: the standard slide. An <h2> headline, then one block from below, and optionally
+  <p class="takeaway"> as a one-line conclusion at the bottom.
+
+Blocks for a standard slide:
+- <ul>, <ol> or <p>.
+- Columns: <div class="columns"><div>...</div><div>...</div></div> (2 or 3; give a column
+  class="box" to frame it, and an <h3> to label it).
+- Big numbers: <div class="numbers"> with 2 to 4 <div class="stat"><div class="v">38%</div>
+  <div class="k">label</div></div>.
+- Chart: <figure> with an inline SVG chart colored with the CSS variables (see the sample), and
+  an optional <figcaption> for the source.
+
+Speaker notes: <aside class="notes">...</aside> inside a slide. Hidden until the user presses N.
+Moving between slides is added by Exhibit: buttons at the top right, arrow keys, Page Up/Down,
+Space, Home/End and swiping. It shows the slide with class "active" and remembers where the user was.
+The PDF (Export, then PDF) has one slide per page.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="exhibit-preset" content="slides@3">
+<title>Weekend support cover</title>
+<style>
+/* ---- slides base v3. Keep this stylesheet as it is; to restyle, change only the variables on :root. ---- */
+:root {
+  --bg:#e9e8e3; --paper:#ffffff; --fg:#1d1d1b; --muted:#6b6b66; --line:#e2e2dc; --card:#f5f5f2;
+  --accent:#2b59c3; --accent-soft:#eaf0fc; --ok:#1f7a4d; --warn:#9a5b00; --bad:#b42318;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --u: 1cqw;  /* one hundredth of the slide's width: every size on a slide is a multiple of it */
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#0e0e0d; --paper:#1c1c1a; --fg:#ecece8; --muted:#a3a39c; --line:#363633; --card:#252523;
+    --accent:#8ab0ff; --accent-soft:#1e2a45; --ok:#5fcf95; --warn:#f0b04a; --bad:#ff8a7a;
+  }
+}
+@media print {
+  :root {
+    --bg:#ffffff; --paper:#ffffff; --fg:#111110; --muted:#5a5a55; --line:#cfcfc8; --card:#f5f5f2;
+    --accent:#1f4aa8; --accent-soft:#eef2fb; --ok:#1f7a4d; --warn:#8a5000; --bad:#a51d12;
+    color-scheme: light;
+  }
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sans); overflow: hidden; }
+
+.deck { position: fixed; inset: 0; display: grid; place-items: center; }
+.slide {
+  display: none; position: relative; overflow: hidden; container-type: inline-size;
+  width: min(calc(100vw - 32px), calc((100vh - 32px) * 16 / 9)); aspect-ratio: 16 / 9;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 6px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .05), 0 16px 40px rgb(0 0 0 / .08);
+}
+.slide.active { display: block; }
+.slide > .in {
+  position: absolute; inset: 0; padding: calc(var(--u) * 6) calc(var(--u) * 7) calc(var(--u) * 6.5);
+  display: flex; flex-direction: column; font-size: calc(var(--u) * 2.3); line-height: 1.4;
+}
+/* Fitting: the script sets --fit below 1 on a slide whose content doesn't fit, shrinking its content
+   (not the margins). If it still doesn't fit at the smallest size, the slide scrolls. */
+.slide > .in > * { --u: calc(1cqw * var(--fit, 1)); }
+.slide > .in { font-size: calc(1cqw * var(--fit, 1) * 2.3); }
+.slide.overfull > .in { overflow-y: auto; }
+.slide::after {
+  content: attr(data-n); position: absolute; right: calc(var(--u) * 3); bottom: calc(var(--u) * 2.4);
+  font-size: calc(var(--u) * 1.3); color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.slide.title::after { content: none; }
+
+.slide h1, .slide h2 { margin: 0; line-height: 1.12; letter-spacing: -.015em; text-wrap: balance; }
+.slide h1 { font-size: calc(var(--u) * 5.4); font-weight: 750; }
+.slide h2 { font-size: calc(var(--u) * 3.5); font-weight: 700; margin-bottom: calc(var(--u) * 2.6); }
+.slide p { margin: 0 0 .7em; text-wrap: pretty; }
+.slide ul, .slide ol { margin: 0; padding-left: 1.25em; }
+.slide li { margin: 0 0 .55em; padding-left: .2em; }
+.slide li::marker { color: var(--accent); }
+.slide b, .slide strong { font-weight: 650; }
+.eyebrow { font-size: calc(var(--u) * 1.4); font-weight: 650; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); margin: 0 0 calc(var(--u) * 1.6) !important; }
+.takeaway { margin-top: auto !important; padding-top: calc(var(--u) * 1.4); border-top: 2px solid var(--accent); font-weight: 600; }
+.muted { color: var(--muted); }
+
+/* title */
+.slide.title > .in { justify-content: center; padding-left: calc(var(--u) * 9); }
+.slide.title > .in::before { content: ""; position: absolute; left: calc(var(--u) * 6); top: 30%; bottom: 30%; width: calc(var(--u) * .6); background: var(--accent); border-radius: 99px; }
+.slide.title .sub { font-size: calc(var(--u) * 2.4); color: var(--muted); margin-top: calc(var(--u) * 1.8); max-width: 80%; }
+.slide.title .by { position: absolute; left: calc(var(--u) * 9); bottom: calc(var(--u) * 5); font-size: calc(var(--u) * 1.5); color: var(--muted); margin: 0; }
+/* divider */
+.slide.divider { background: var(--accent-soft); }
+.slide.divider > .in { justify-content: center; }
+.slide.divider h2 { font-size: calc(var(--u) * 4.6); margin: 0; max-width: 80%; }
+/* columns */
+.columns { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: calc(var(--u) * 3.5); flex: 1; min-height: 0; }
+.columns + .takeaway { margin-top: calc(var(--u) * 2.2) !important; }
+.columns h3 { font-size: calc(var(--u) * 2.3); margin: 0 0 .6em; color: var(--accent); }
+.box { border: 1px solid var(--line); background: var(--card); border-radius: calc(var(--u) * .8); padding: calc(var(--u) * 2.4); }
+/* stats */
+.numbers { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: calc(var(--u) * 2.5); margin: auto 0; }
+.stat { border-top: calc(var(--u) * .35) solid var(--accent); padding-top: calc(var(--u) * 1.6); }
+.stat .v { font-size: calc(var(--u) * 6.2); font-weight: 750; line-height: 1; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.stat .k { font-size: calc(var(--u) * 1.8); color: var(--muted); margin-top: calc(var(--u) * 1.2); line-height: 1.35; }
+/* chart */
+.slide figure { margin: 0; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.slide figure svg { flex: 1; min-height: 0; width: 100%; }
+.slide figcaption { font-size: calc(var(--u) * 1.3); color: var(--muted); margin-top: calc(var(--u) * 1); }
+.chart text { font-family: var(--sans); font-size: 15px; fill: var(--muted); }
+.chart .bar { fill: var(--accent); }
+.chart .bar.prev { fill: var(--muted); opacity: .35; }
+.chart .axis { stroke: var(--line); }
+.chart .val { fill: var(--fg); font-weight: 650; font-size: 17px; }
+/* quote */
+.slide.quote > .in { justify-content: center; padding-left: calc(var(--u) * 10); padding-right: calc(var(--u) * 10); }
+.slide blockquote { margin: 0; font-size: calc(var(--u) * 3.5); line-height: 1.3; font-weight: 600; text-wrap: balance; position: relative; }
+.slide blockquote::before { content: "\201C"; position: absolute; left: -.62em; top: -.12em; font-size: 2.3em; line-height: 1; color: var(--accent); }
+.slide .cite { margin-top: calc(var(--u) * 2.4); font-size: calc(var(--u) * 1.8); color: var(--muted); }
+/* end */
+.slide.end h2 { font-size: calc(var(--u) * 4.2); }
+.slide.end ol { font-size: calc(var(--u) * 2.6); }
+
+/* notes (N) */
+.notes { display: none; }
+body.show-notes .deck { inset: 0 0 116px 0; }
+body.show-notes .slide { width: min(calc(100vw - 32px), calc((100vh - 148px) * 16 / 9)); }
+.notes-panel { display: none; position: fixed; left: 0; right: 0; bottom: 0; height: 116px; overflow: auto; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--paper); font-size: 14px; line-height: 1.5; }
+body.show-notes .notes-panel { display: block; }
+
+
+/* Phones held upright: show every slide in a scrolling column, with text at a readable size. */
+@media screen and (max-width: 640px) and (orientation: portrait) {
+  :root { --u: 6.2px; }
+  body { overflow: auto; }
+  .deck { position: static; display: block; place-items: normal; padding: 12px 12px 64px; }
+  .slide, body.show-notes .slide { display: block; width: auto; aspect-ratio: auto; margin: 0 0 12px; }
+  .slide > .in { position: relative; min-height: 56vw; padding: 28px 22px 34px; }
+  .slide.title > .in { padding-left: 34px; padding-bottom: 56px; }
+  .slide.title > .in::before { left: 20px; }
+  .slide.title .by { left: 34px; bottom: 24px; }
+  .slide.quote > .in { padding: 32px 26px 32px 44px; }
+  .numbers, .columns { grid-auto-flow: row; }
+  .notes-panel { display: none !important; }
+  body.show-notes .notes { display: block; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 16px; padding-top: 10px; }
+}
+
+/* Print: every slide, one per landscape page. */
+@page { size: 13.333in 7.5in; margin: 0; }
+@media print {
+  html, body { height: auto; overflow: visible; background: none; }
+  .deck { position: static; display: block; place-items: normal; }
+  .slide, body.show-notes .slide { display: block !important; width: 13.333in; height: 7.5in; aspect-ratio: auto; border: 0; border-radius: 0; box-shadow: none; break-after: page; }
+  .slide:last-child { break-after: auto; }
+  .notes-panel, .notes { display: none !important; }
+  .slide.overfull > .in { overflow: hidden; }
+}
+/* ---- end slides base ---- */
+</style>
+</head>
+<body>
+<main class="deck" id="deck">
+
+<section class="slide title"><div class="in">
+  <p class="eyebrow">Customer Operations · Q3 review</p>
+  <h1>Weekend support cover</h1>
+  <p class="sub">Faster replies all week, except at the weekend. A proposal to close the gap.</p>
+  <p class="by">Customer Operations · 9 November 2026</p>
+  <aside class="notes">Five minutes. The ask is on the last slide: approve a weekend rota from 5 December.</aside>
+</div></section>
+
+<section class="slide"><div class="in">
+  <h2>The new triage queue worked</h2>
+  <div class="numbers">
+    <div class="stat"><div class="v">38%</div><div class="k">faster first response since July</div></div>
+    <div class="stat"><div class="v">91%</div><div class="k">satisfaction, the best this year</div></div>
+    <div class="stat"><div class="v">0</div><div class="k">extra people needed</div></div>
+  </div>
+</div></section>
+
+<section class="slide"><div class="in">
+  <h2>Every month beat last year, and the gap is widening</h2>
+  <figure>
+    <svg class="chart" viewBox="0 0 900 360" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Median hours to first response by month, 2025 and 2026">
+      <line class="axis" x1="40" y1="310" x2="880" y2="310"/>
+      <rect class="bar prev" x="110" y="112" width="90" height="198"/><text class="val" x="155" y="100" text-anchor="middle">4.4 h</text>
+      <rect class="bar" x="210" y="175" width="90" height="135"/><text class="val" x="255" y="163" text-anchor="middle">3.0 h</text>
+      <text x="205" y="338" text-anchor="middle">July</text>
+      <rect class="bar prev" x="380" y="121" width="90" height="189"/><text class="val" x="425" y="109" text-anchor="middle">4.2 h</text>
+      <rect class="bar" x="480" y="193" width="90" height="117"/><text class="val" x="525" y="181" text-anchor="middle">2.6 h</text>
+      <text x="475" y="338" text-anchor="middle">August</text>
+      <rect class="bar prev" x="650" y="130" width="90" height="180"/><text class="val" x="695" y="118" text-anchor="middle">4.0 h</text>
+      <rect class="bar" x="750" y="211" width="90" height="99"/><text class="val" x="795" y="199" text-anchor="middle">2.2 h</text>
+      <text x="745" y="338" text-anchor="middle">September</text>
+      <rect class="bar prev" x="40" y="14" width="16" height="16"/><text x="64" y="28">2025</text>
+      <rect class="bar" x="130" y="14" width="16" height="16"/><text x="154" y="28">2026</text>
+    </svg>
+    <figcaption>Median hours to first response. Source: helpdesk export, Q3 2025 and 2026.</figcaption>
+  </figure>
+</div></section>
+
+<section class="slide divider"><div class="in">
+  <p class="eyebrow">The problem</p>
+  <h2>Weekends are where tickets still wait</h2>
+</div></section>
+
+<section class="slide"><div class="in">
+  <h2>Weekend tickets wait more than twice as long</h2>
+  <ul>
+    <li>Median wait is <b>6.1 hours</b> at the weekend, against 2.6 on weekdays.</li>
+    <li>Weekends are 14% of tickets but <b>41% of the ones that waited over a day</b>.</li>
+    <li>Nobody is scheduled on Saturdays; Sunday cover is voluntary and uneven.</li>
+  </ul>
+  <p class="takeaway">The December sale lands on a weekend: about 900 tickets with no one on shift.</p>
+  <aside class="notes">Mention the complaint volume from last December if asked.</aside>
+</div></section>
+
+<section class="slide"><div class="in">
+  <h2>A small rota closes most of the gap</h2>
+  <div class="columns">
+    <div class="box"><h3>Today</h3><ul><li>No Saturday cover</li><li>Sunday cover by volunteers</li><li>Weekend median 6.1 h</li></ul></div>
+    <div class="box"><h3>Proposed</h3><ul><li>4 hours each weekend day</li><li>12 people, one shift every 6 weeks</li><li>Target: under 4 h</li></ul></div>
+  </div>
+</div></section>
+
+<section class="slide quote"><div class="in">
+  <blockquote>Friday-night tickets are the ones that turn into complaints. A four-hour shift would catch most of them.</blockquote>
+  <p class="cite">Team lead, Email support</p>
+</div></section>
+
+<section class="slide end"><div class="in">
+  <h2>Decision needed today</h2>
+  <ol>
+    <li>Approve the weekend rota, paid as overtime, from 5 December.</li>
+    <li>We publish the rota by 20 November.</li>
+    <li>We review the numbers at the end of January.</li>
+  </ol>
+</div></section>
+
+</main>
+<div class="notes-panel" id="notes-panel" aria-live="polite"></div>
+<script>
+(() => {
+  // Moving between slides is not done here: Exhibit adds it to every deck (buttons, keys, swipes,
+  // the remembered slide), and shows the slide with class "active". This script numbers the slides,
+  // fits their text and toggles the speaker notes.
+  const slides = [...document.querySelectorAll(".slide")];
+  slides.forEach((s, n) => { s.dataset.n = n + 1; });
+  if (slides.length && !slides.some((s) => s.classList.contains("active"))) slides[0].classList.add("active");
+
+  // Fitting: shrink a crowded slide's content until it fits (down to MIN_FIT); past that, it scrolls.
+  // Sizes scale with the slide's width, so one fit holds at any window size and on paper.
+  const MIN_FIT = 0.6;
+  const stacked = matchMedia("screen and (max-width: 640px) and (orientation: portrait)");
+  const overflows = (inner) => {
+    const box = inner.getBoundingClientRect(), style = getComputedStyle(inner);
+    const bottom = box.bottom - parseFloat(style.paddingBottom) + 1;
+    const right = box.right - parseFloat(style.paddingRight) + 1;
+    for (const el of inner.querySelectorAll("*")) {
+      if (el.closest(".notes") || getComputedStyle(el).position === "absolute") continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width && !r.height) continue;
+      if (r.bottom > bottom || r.right > right) return true;
+      if (el instanceof SVGElement) continue;
+      // Content spilling out of its own box (a column into the takeaway, a word out of its tile).
+      // Tight headings report a little overflow from their letters alone, so allow a quarter em.
+      const slack = parseFloat(getComputedStyle(el).fontSize) * 0.25 + 1;
+      if (el.clientWidth && el.scrollWidth > el.clientWidth + slack) return true;
+      if (el.clientHeight && el.scrollHeight > el.clientHeight + slack) return true;
+    }
+    return false;
+  };
+  const fit = (slide) => {
+    const inner = slide.querySelector(":scope > .in");
+    slide.classList.remove("overfull");
+    slide.style.removeProperty("--fit");
+    if (!inner || stacked.matches || !overflows(inner)) return;
+    let lo = MIN_FIT, hi = 1;
+    slide.style.setProperty("--fit", lo);
+    if (overflows(inner)) {
+      slide.classList.add("overfull");
+      console.warn(`Slide ${slide.dataset.n} doesn't fit even with smaller text; split it into two slides.`);
+      return;
+    }
+    for (let i = 0; i < 7; i++) {
+      const mid = (lo + hi) / 2;
+      slide.style.setProperty("--fit", mid);
+      if (overflows(inner)) hi = mid; else lo = mid;
+    }
+    slide.style.setProperty("--fit", lo.toFixed(3));
+  };
+  const fitAll = () => slides.forEach((s) => {
+    const active = s.classList.contains("active");
+    s.classList.add("active");  // hidden slides can't be measured
+    fit(s);
+    s.classList.toggle("active", active);
+  });
+  let fitting = 0;
+  const refit = () => { cancelAnimationFrame(fitting); fitting = requestAnimationFrame(fitAll); };
+
+  // Speaker notes: N shows the current slide's notes under it.
+  addEventListener("keydown", (e) => {
+    if (e.target.closest("input, textarea, select, [contenteditable]") || e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.key !== "n" && e.key !== "N") return;
+    document.body.classList.toggle("show-notes");
+    e.preventDefault();
+  });
+  fitAll();
+  addEventListener("resize", refit);
+  if (document.fonts) document.fonts.ready.then(refit);
+})();
+</script>
+</body>
+</html>

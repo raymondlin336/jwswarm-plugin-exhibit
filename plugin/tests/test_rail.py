@@ -70,6 +70,8 @@ class FakeToolCall:
 
 
 SHOW_NEW = {"action": "show", "title": "Chart", "html": "<p>x</p>"}
+PRESET = {"action": "preset"}
+OPTIONS = ["Document", "Slides", "No preset"]
 
 
 class ExhibitAskRailTests(unittest.TestCase):
@@ -100,6 +102,11 @@ class ExhibitAskRailTests(unittest.TestCase):
         gate["asked"] = call_id
         self.session.state[MOD._STATE_KEY] = gate
 
+    def choose(self, answer="Document"):
+        """Ask for a preset and answer the dialog, as the user would."""
+        self.assertEqual(self.resolve(**PRESET).kind, "interrupt")
+        return self.resolve({"a": answer}, **PRESET)
+
     def call(self, tool, user_input=None, **args):
         call = FakeToolCall(_name=tool, **args)
         return _decision(asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), call, user_input)))
@@ -110,8 +117,28 @@ class ExhibitAskRailTests(unittest.TestCase):
         call = FakeToolCall(**(args or SHOW_NEW))
         return _decision(asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), call, user_input)))
 
-    def test_watches_exhibit_send_file_and_skill_tools(self):
-        self.assertEqual(self.rail.get_tools(), {"exhibit", "send_file_to_user", "skill_tool"})
+    def test_watches_exhibit_send_file_skill_and_write_tools(self):
+        self.assertEqual(self.rail.get_tools(), {"exhibit", "send_file_to_user", "skill_tool", "write_file"})
+
+    def test_show_without_a_page_uses_the_page_just_saved(self):
+        # deepseek-v4-flash saved the page with write_file, then sent ~20 show calls without html_file.
+        page = Path(self.tmp.name, "work", "freeform.html")
+        page.parent.mkdir()
+        page.write_text("<p>x</p>", encoding="utf-8")
+        self.turn("make it free-form")
+        self.assertEqual(self.call("write_file", file_path=str(page), content="<p>x</p>").kind, "approve")
+        self.call("write_file", file_path=str(Path(self.tmp.name, "notes.txt")), content="not a page")
+        self.add_exhibit("plain-aaa111", "Plain")
+        call, decision = self.ask("call-a", action="show", exhibit_id="plain-aaa111")
+        self.assertEqual(decision.kind, "approve")
+        self.assertEqual(json.loads(call.arguments)["html_file"], str(page))
+        # A call that sends its own page is left alone.
+        call, _ = self.ask("call-b", action="show", exhibit_id="plain-aaa111", html="<p>own</p>")
+        self.assertNotIn("html_file", json.loads(call.arguments))
+        # With no saved page there's nothing to fill in.
+        page.unlink()
+        call, _ = self.ask("call-c", action="show", exhibit_id="plain-aaa111")
+        self.assertNotIn("html_file", json.loads(call.arguments))
 
     def test_runs_before_the_permission_rail(self):
         # WorkSwarm's permission rail has priority 90 and denies any resume answer it finds.
@@ -120,60 +147,79 @@ class ExhibitAskRailTests(unittest.TestCase):
 
     def test_dialog_answer_is_consumed_so_later_rails_see_a_first_call(self):
         self.turn("chart this data")
-        call = FakeToolCall(**SHOW_NEW)
+        call = FakeToolCall(**PRESET)
         key = MOD.RESUME_USER_INPUT_KEY
         for carrier in (
-            types.SimpleNamespace(user_inputs={"call-1": {"a": "Exhibit"}}),  # InteractiveInput shape
-            {"call-1": {"a": "Exhibit"}},  # dict keyed by call id
-            {"a": "Exhibit"},  # bare answer
+            types.SimpleNamespace(user_inputs={"call-1": {"a": "Document"}}),  # InteractiveInput shape
+            {"call-1": {"a": "Document"}},  # dict keyed by call id
+            {"a": "Document"},  # bare answer
         ):
             ctx = FakeCtx(self.session)
             ctx.extra = {key: carrier}
             self.mark_asked()
-            decision = _decision(asyncio.run(self.rail.resolve_interrupt(ctx, call, {"a": "Exhibit"})))
+            decision = _decision(asyncio.run(self.rail.resolve_interrupt(ctx, call, {"a": "Document"})))
             self.assertEqual(decision.kind, "approve")
             self.assertNotIn(key, ctx.extra)
 
     def test_other_calls_answers_are_left_alone(self):
         self.turn("chart this data")
         ctx = FakeCtx(self.session)
-        carrier = types.SimpleNamespace(user_inputs={"call-1": {"a": "Exhibit"}, "call-2": {"ok": True}})
+        carrier = types.SimpleNamespace(user_inputs={"call-1": {"a": "Document"}, "call-2": {"ok": True}})
         ctx.extra = {MOD.RESUME_USER_INPUT_KEY: carrier}
         self.mark_asked()
-        asyncio.run(self.rail.resolve_interrupt(ctx, FakeToolCall(**SHOW_NEW), {"a": "Exhibit"}))
+        asyncio.run(self.rail.resolve_interrupt(ctx, FakeToolCall(**PRESET), {"a": "Document"}))
         self.assertEqual(carrier.user_inputs, {"call-2": {"ok": True}})
 
-    def test_vague_request_asks_with_two_options(self):
+    # Preset question --------------------------------------------------------
+    def test_vague_request_asks_for_a_preset_or_chat(self):
         self.turn("can you make me a chart of this benchmark")
-        decision = self.resolve()
+        decision = self.resolve(**PRESET)
         self.assertEqual(decision.kind, "interrupt")
         (question,) = decision.request.questions
-        self.assertEqual([o["label"] for o in question["options"]], ["Exhibit", "Answer in chat"])
+        self.assertEqual([o["label"] for o in question["options"]], OPTIONS + ["Answer in chat"])
+        self.assertEqual(question["question"], MOD._TEXT["en"]["preset_or_chat_question"])
         self.assertFalse(question["multi_select"])
 
-    def test_agent_alternative_replaces_the_generic_chat_description(self):
-        self.turn("chart this data")
-        args = dict(SHOW_NEW, chat_alternative="A static bar chart image   of the scores")
-        (question,) = self.resolve(**args).request.questions
-        self.assertEqual(question["options"][1]["description"], "A static bar chart image of the scores")
-        decision = self.resolve({"a": "Answer in chat"}, **args)
-        self.assertIn("you offered: A static bar chart image of the scores", decision.tool_result)
-
-    def test_generic_chat_description_is_used_without_an_alternative(self):
-        self.turn("chart this data")
-        (question,) = self.resolve().request.questions
-        self.assertEqual(question["options"][1]["description"], MOD._TEXT["en"]["chat_desc"])
-        decision = self.resolve({"a": "Answer in chat"})
-        self.assertNotIn("you offered", decision.tool_result)
-
-    def test_long_alternative_is_trimmed(self):
-        self.turn("chart this data")
-        (question,) = self.resolve(**dict(SHOW_NEW, chat_alternative="x" * 500)).request.questions
-        self.assertLessEqual(len(question["options"][1]["description"]), MOD._MAX_ALTERNATIVE_CHARS)
-
-    def test_mentioning_an_exhibit_skips_the_question(self):
+    def test_mentioning_an_exhibit_still_asks_but_without_chat(self):
         self.turn("Make me an exhibit of a budget planner")
+        decision = self.resolve(**PRESET)
+        self.assertEqual(decision.kind, "interrupt")  # the user always picks
+        (question,) = decision.request.questions
+        self.assertEqual([o["label"] for o in question["options"]], OPTIONS)
+        self.assertEqual(question["question"], MOD._TEXT["en"]["preset_question"])
+
+    def test_the_users_pick_is_written_into_the_call(self):
+        for answer, name in (("Document", "document"), ("Slides", "slides"), ("No preset", "none")):
+            self.turn("make an exhibit")
+            self.mark_asked()
+            call = FakeToolCall(action="preset", name="document")  # the agent's own guess is replaced
+            decision = asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), call, {"a": answer}))
+            self.assertEqual(_decision(decision).kind, "approve")
+            self.assertEqual(json.loads(call.arguments)["name"], name)
+            if hasattr(decision, "new_args"):
+                self.assertEqual(json.loads(decision.new_args)["name"], name)
+
+    def test_new_show_waits_for_a_pick(self):
+        self.turn("make an exhibit of this")
+        refused = self.resolve()
+        self.assertEqual(refused.kind, "reject")
+        self.assertTrue(refused.tool_result.startswith("[CHOOSE_PRESET]"))
+        self.assertEqual(self.choose().kind, "approve")
         self.assertEqual(self.resolve().kind, "approve")
+
+    def test_each_new_exhibit_needs_its_own_pick(self):
+        self.turn("make two exhibits")
+        self.choose("Slides")
+        again = FakeToolCall(**PRESET)  # asking for the page again before showing reuses the pick
+        self.assertEqual(_decision(asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), again, None))).kind,
+                         "approve")
+        self.assertEqual(json.loads(again.arguments)["name"], "slides")
+        self.assertEqual(self.resolve().kind, "approve")
+        self.tool_finished({"success": False, "error_code": "missing_html", "error": "x"}, **SHOW_NEW)
+        self.assertEqual(self.resolve().kind, "approve")  # a failed show keeps the pick for the retry
+        self.tool_finished({"success": True, "exhibit_id": "chart-1"}, **SHOW_NEW)
+        self.assertTrue(self.resolve().tool_result.startswith("[CHOOSE_PRESET]"))
+        self.assertEqual(self.resolve(**PRESET).kind, "interrupt")
 
     def test_edits_and_other_actions_never_ask(self):
         self.turn("make the bars blue")
@@ -181,66 +227,102 @@ class ExhibitAskRailTests(unittest.TestCase):
         for action in ("list", "read", "open", "delete", "stop"):
             self.assertEqual(self.resolve(action=action, exhibit_id="chart-abc123").kind, "approve")
 
-    def test_choosing_exhibit_approves_and_is_remembered(self):
+    def test_a_new_turn_asks_again(self):
         self.turn("chart this data")
-        self.assertEqual(self.resolve({"answers": {"Should I make this an exhibit or answer in chat?": "Exhibit"}}).kind, "approve")
-        self.turn("now chart the other table")  # later turn in the same chat
-        self.assertEqual(self.resolve().kind, "approve")
+        self.choose()
+        self.turn("now chart the other table")
+        self.assertTrue(self.resolve().tool_result.startswith("[CHOOSE_PRESET]"))
+        (question,) = self.resolve(**PRESET).request.questions
+        self.assertEqual([o["label"] for o in question["options"]], OPTIONS)  # chat isn't offered again
+
+    def test_agent_alternative_replaces_the_generic_chat_description(self):
+        self.turn("chart this data")
+        args = dict(PRESET, chat_alternative="A static bar chart image   of the scores")
+        (question,) = self.resolve(**args).request.questions
+        self.assertEqual(question["options"][3]["description"], "A static bar chart image of the scores")
+        decision = self.resolve({"a": "Answer in chat"}, **args)
+        self.assertIn("you offered: A static bar chart image of the scores", decision.tool_result)
+
+    def test_generic_chat_description_is_used_without_an_alternative(self):
+        self.turn("chart this data")
+        (question,) = self.resolve(**PRESET).request.questions
+        self.assertEqual(question["options"][3]["description"], MOD._TEXT["en"]["chat_desc"])
+        decision = self.resolve({"a": "Answer in chat"}, **PRESET)
+        self.assertNotIn("you offered", decision.tool_result)
+
+    def test_long_alternative_is_trimmed(self):
+        self.turn("chart this data")
+        (question,) = self.resolve(**dict(PRESET, chat_alternative="x" * 500)).request.questions
+        self.assertLessEqual(len(question["options"][3]["description"]), MOD._MAX_ALTERNATIVE_CHARS)
 
     def test_choosing_chat_rejects_and_blocks_retries_this_turn(self):
         self.turn("chart this data")
-        decision = self.resolve({"q": "Answer in chat"})
+        decision = self.resolve({"q": "Answer in chat"}, **PRESET)
         self.assertEqual(decision.kind, "reject")
         self.assertTrue(decision.tool_result.startswith("[USER_CHOSE_CHAT]"))
-        retry = self.resolve()
-        self.assertEqual(retry.kind, "reject")
-        self.assertTrue(retry.tool_result.startswith("[USER_CHOSE_CHAT]"))
+        for args in (PRESET, SHOW_NEW):
+            retry = self.resolve(**args)
+            self.assertEqual(retry.kind, "reject")
+            self.assertTrue(retry.tool_result.startswith("[USER_CHOSE_CHAT]"))
         self.turn("ok fine, chart something else")  # a new turn asks again
-        self.assertEqual(self.resolve().kind, "interrupt")
+        self.assertEqual(self.resolve(**PRESET).kind, "interrupt")
 
-    def test_free_text_answer_is_passed_on_and_next_call_goes_through(self):
+    def test_free_text_answer_is_passed_on_and_next_calls_go_through(self):
         self.turn("chart this data")
-        decision = self.resolve("yes but only the top 5 rows")
+        decision = self.resolve("yes but only the top 5 rows", **PRESET)
         self.assertEqual(decision.kind, "reject")
         self.assertIn("top 5 rows", decision.tool_result)
         self.assertTrue(decision.tool_result.startswith("[USER_REPLIED]"))
+        call = FakeToolCall(action="preset", name="slides")
+        self.assertEqual(_decision(asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), call, None))).kind,
+                         "approve")
+        self.assertEqual(json.loads(call.arguments)["name"], "slides")  # the agent's pick is kept
         self.assertEqual(self.resolve().kind, "approve")
 
-    def test_skip_button_shows_the_exhibit_without_remembering(self):
+    def test_skip_button_means_no_preset_without_remembering(self):
         self.turn("chart this data")
-        q = "Should I make this an exhibit or answer in chat?"
-        self.assertEqual(self.resolve({"answers": {q: "用户已跳过此题，未选择任何选项。"}}).kind, "approve")
+        self.mark_asked()
+        call = FakeToolCall(**PRESET)
+        skipped = {"answers": {"q": "用户已跳过此题，未选择任何选项。"}}
+        decision = asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), call, skipped))
+        self.assertEqual(_decision(decision).kind, "approve")
+        self.assertEqual(json.loads(call.arguments)["name"], "none")
+        self.assertEqual(self.resolve().kind, "approve")
         self.turn("chart the other table")
-        self.assertEqual(self.resolve().kind, "interrupt")  # Skip isn't a lasting choice
+        (question,) = self.resolve(**PRESET).request.questions
+        self.assertIn("Answer in chat", [o["label"] for o in question["options"]])  # Skip isn't a lasting choice
 
     def test_cancel_button_cancels_and_blocks_retries_this_turn(self):
         self.turn("chart this data")
-        decision = self.resolve({"answers": {"q": "用户已取消本次问答，未作答。"}})
+        decision = self.resolve({"answers": {"q": "用户已取消本次问答，未作答。"}}, **PRESET)
         self.assertEqual(decision.kind, "reject")
         self.assertTrue(decision.tool_result.startswith("[USER_CANCELLED]"))
+        self.assertEqual(self.resolve(**PRESET).kind, "reject")
         self.assertEqual(self.resolve().kind, "reject")
 
     def test_empty_answer_asks_again(self):
         self.turn("chart this data")
-        self.assertEqual(self.resolve({"answers": {"q": "  "}}).kind, "interrupt")
+        self.assertEqual(self.resolve({"answers": {"q": "  "}}, **PRESET).kind, "interrupt")
 
     def test_chinese_request_gets_chinese_options(self):
         self.turn("帮我把这个基准测试做成图表")
-        (question,) = self.resolve().request.questions
-        self.assertEqual([o["label"] for o in question["options"]], ["展品", "在对话中回答"])
-        self.assertEqual(self.resolve({"a": "展品"}).kind, "approve")
+        (question,) = self.resolve(**PRESET).request.questions
+        self.assertEqual([o["label"] for o in question["options"]], ["文档", "幻灯片", "不用预设", "在对话中回答"])
+        self.assertEqual(self.resolve({"a": "幻灯片"}, **PRESET).kind, "approve")
 
     def test_resume_turn_keeps_state(self):
         self.turn("chart this data")
+        self.choose()
         asyncio.run(self.rail.before_invoke(FakeCtx(self.session, query=object())))  # InteractiveInput on resume
-        self.assertEqual(self.resolve().kind, "interrupt")
+        self.assertEqual(self.resolve().kind, "approve")
 
     def test_answers_to_questions_we_didnt_ask_are_left_alone(self):
         # e.g. a permission dialog's answer waiting for this call: not ours, so not consumed or used.
         self.turn("make an exhibit of this")
+        self.choose()
         ctx = FakeCtx(self.session)
-        ctx.extra = {MOD.RESUME_USER_INPUT_KEY: {"call-1": {"approved": True}}}
-        call = FakeToolCall(**SHOW_NEW)
+        ctx.extra = {MOD.RESUME_USER_INPUT_KEY: {"call-2": {"approved": True}}}
+        call = FakeToolCall(_id="call-2", **SHOW_NEW)
         decision = _decision(asyncio.run(self.rail.resolve_interrupt(ctx, call, {"approved": True})))
         self.assertEqual(decision.kind, "approve")
         self.assertIn(MOD.RESUME_USER_INPUT_KEY, ctx.extra)
@@ -317,10 +399,11 @@ class ExhibitAskRailTests(unittest.TestCase):
         self.assertTrue(decision.tool_result.startswith("[LOAD_SKILL]"))
         for action in ("list", "gallery", "read", "open"):
             self.assertEqual(self.resolve(action=action, exhibit_id="budget-abc123").kind, "approve")
+        self.assertTrue(self.resolve(**PRESET).tool_result.startswith("[LOAD_SKILL]"))
         self.call("skill_tool", skill_name="some-other-skill")
         self.assertEqual(self.resolve().kind, "reject")
         self.call("skill_tool", skill_name="exhibit")
-        self.assertEqual(self.resolve().kind, "approve")
+        self.assertEqual(self.resolve(**PRESET).kind, "interrupt")
 
     # Loop guard -------------------------------------------------------------
     def tool_finished(self, result, **args):
@@ -331,6 +414,7 @@ class ExhibitAskRailTests(unittest.TestCase):
 
     def test_identical_failures_are_stopped_after_three(self):
         self.turn("make an exhibit deck of this repo")
+        self.choose("Slides")
         no_html = {"action": "show", "title": "Deck", "summary": "Five slides"}
         failure = {"success": False, "error_code": "missing_html", "error": "No page was sent."}
         for _ in range(3):
@@ -344,24 +428,27 @@ class ExhibitAskRailTests(unittest.TestCase):
         fixed = dict(no_html, html_file="C:/work/deck.html")  # a changed call is allowed through
         self.assertEqual(self.resolve(**fixed).kind, "approve")
         self.turn("try again")  # a new turn starts the count over
+        self.choose("Slides")
         self.assertEqual(self.resolve(**no_html).kind, "approve")
 
     def test_success_clears_the_count_and_other_results_are_ignored(self):
         self.turn("make an exhibit")
         args = {"action": "show", "title": "Deck"}
+        self.choose()
         failure = str({"success": False, "error_code": "missing_html", "error": "x"})  # as WorkSwarm logs it
         self.tool_finished(failure, **args)
         self.tool_finished(failure, **args)
         self.tool_finished("[USER_CHOSE_CHAT] not a tool result", **args)  # a rail message: ignored
         self.tool_finished({"success": True, "exhibit_id": "deck-1"}, action="show", title="Other")
         self.tool_finished(failure, **args)
+        self.choose()  # the success above was a new exhibit, which used up the pick
         self.assertEqual(self.resolve(**args).kind, "approve")  # 1 since the success, not 3
 
     def test_explicit_mention_counts_for_the_whole_chat(self):
         self.turn("make me a deck about this repo, with exhibit")
-        self.assertEqual(self.resolve().kind, "approve")
         self.turn("what?")  # a follow-up without the word
-        self.assertEqual(self.resolve().kind, "approve")
+        (question,) = self.resolve(**PRESET).request.questions
+        self.assertEqual([o["label"] for o in question["options"]], OPTIONS)
 
     # References ---------------------------------------------------------------
     def test_finds_references_in_a_message(self):
@@ -425,6 +512,61 @@ class ExhibitAskRailTests(unittest.TestCase):
         self.turn("thanks")
         asyncio.run(self.rail.before_model_call(FakeCtx(self.session)))
         self.assertNotIn("exhibit_references", builder.sections)
+
+    def add_exhibit(self, exhibit_id, title, preset=None):
+        meta = Path(self.tmp.name, "exhibits", exhibit_id, "meta.json")
+        meta.parent.mkdir(parents=True)
+        versions = [{"version": 1, "preset": preset}] if preset else []
+        meta.write_text(json.dumps({"id": exhibit_id, "title": title, "versions": versions}), encoding="utf-8")
+
+    def test_edits_to_an_existing_exhibit_never_ask(self):
+        # Formats can't change (the tool refuses with preset_locked), so there's nothing to ask about.
+        self.add_exhibit("report-def456", "Q3 report", preset="document")
+        self.turn("make it one continuous page")
+        edit = {"action": "show", "exhibit_id": "report-def456", "html": "<p>x</p>"}
+        self.assertEqual(self.ask("call-a", **edit)[1].kind, "approve")
+
+    def ask(self, call_id, user_input=None, **args):
+        call = FakeToolCall(_id=call_id, **args)
+        return call, _decision(asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), call, user_input)))
+
+    def test_only_one_question_waits_at_a_time(self):
+        # The agent deleted 8 exhibits with 8 parallel calls: WorkSwarm showed 8 dialogs but takes an
+        # answer for only one, and the rail used to forget all but the last. Now the first call asks
+        # and the rest are turned back with nothing done.
+        self.add_exhibit("chart-def456", "Sales chart")
+        self.turn("delete all my exhibits")
+        _, first = self.ask("call-a", action="delete", exhibit_id="budget-abc123")
+        _, second = self.ask("call-b", action="delete", exhibit_id="chart-def456")
+        self.assertEqual(first.kind, "interrupt")
+        self.assertEqual(second.kind, "reject")
+        self.assertIn("[ONE_AT_A_TIME]", str(second.tool_result))
+        # The answer to the first one is still recognized, and then the next can ask.
+        call, answered = self.ask("call-a", {"a": "Delete"}, action="delete", exhibit_id="budget-abc123")
+        self.assertEqual(answered.kind, "approve")
+        self.assertTrue(json.loads(call.arguments)["confirm"])
+        self.assertEqual(self.ask("call-c", action="delete", exhibit_id="chart-def456")[1].kind, "interrupt")
+        # A new message from the user starts fresh, even if a dialog was left unanswered.
+        self.turn("never mind")
+        self.assertEqual(self.ask("call-d", action="delete", exhibit_id="chart-def456")[1].kind, "interrupt")
+
+    def test_bulk_delete_asks_once_for_all(self):
+        self.add_exhibit("chart-def456", "Sales chart")
+        self.turn("delete all my exhibits")
+        ids = ["budget-abc123", "#def456", "gone-000000"]  # an id, a code, and one that doesn't exist
+        _, decision = self.ask("call-a", action="delete", exhibit_ids=ids)
+        self.assertEqual(decision.kind, "interrupt")
+        (question,) = decision.request.questions
+        self.assertEqual(question["question"], "Delete these 2 exhibits? “Monthly budget”, “Sales chart”")
+        self.assertEqual([o["label"] for o in question["options"]], ["Delete", "Keep it"])
+        call, answered = self.ask("call-a", {"a": "Delete"}, action="delete", exhibit_ids=ids)
+        self.assertEqual(answered.kind, "approve")
+        self.assertEqual(json.loads(call.arguments)["exhibit_ids"], ids)
+        self.assertTrue(json.loads(call.arguments)["confirm"])
+        # A long list names the first dozen and counts the rest.
+        many = [MOD._delete_question("en", [f"E{i}" for i in range(15)])["question"]]
+        self.assertTrue(many[0].startswith("Delete these 15 exhibits?"))
+        self.assertTrue(many[0].endswith("“E11” and 3 more"))
 
     def test_delete_by_code_still_asks(self):
         self.turn("delete it")

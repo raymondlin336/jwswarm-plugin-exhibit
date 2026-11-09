@@ -35,7 +35,7 @@ Known gaps: scripts from the three CDNs are trusted; an exhibit can still beacon
   - the agent sees the tool and loads the skill;
   - a vague chart request brings up the "Exhibit or answer in chat?" dialog, with the agent's own description of the chat alternative;
   - picking Exhibit saves the exhibit and opens it in the default browser.
-- 79 unit tests (42 for the tool, 37 for the rail), run on Python 3.11 (WorkSwarm's version) with the real openjiuwen: `powershell -File plugin\run_tests.ps1` (uses the AgentStudio venv; set `EXHIBIT_PYTHON` to use another 3.11 interpreter).
+- 99 unit tests (55 for the tool, 44 for the rail; two render real PDFs and are skipped without Edge or Chrome), run on Python 3.11 (WorkSwarm's version) with the real openjiuwen: `powershell -File plugin\run_tests.ps1` (uses the AgentStudio venv; set `EXHIBIT_PYTHON` to use another 3.11 interpreter).
 - The rail's pause, resume and permission-rail ordering, run against openjiuwen's real interrupt code (AgentStudio venv, openjiuwen 0.1.17).
 - Sandbox in headless Microsoft Edge (as "Live Pages", before the rename to Exhibit):
   - the exhibit loaded data saved earlier, and saved a visit counter on each load (3 over 3 loads);

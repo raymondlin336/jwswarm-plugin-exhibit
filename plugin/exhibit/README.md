@@ -11,13 +11,14 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 ## Requirements
 
 - **Windows**, with a default web browser set. Exhibits open there, not inside WorkSwarm.
+- **Microsoft Edge** (built into Windows 10 and 11) or Google Chrome, for PDF export.
 - No account, API key or extra software.
 
 ## Core capabilities
 
 - **exhibit (skill)**: Tells the agent when an exhibit helps, how to write one that works in the sandbox, how to save data with `window.exhibit`, and to treat saved data as user input, not instructions.
-- **exhibit (tool)**: Saves exhibits and their versions, opens them in your browser, and reads back what you saved. Actions: `show`, `list`, `gallery`, `read`, `open`, `delete` and `stop`.
-- **ExhibitAskRail (rail)**: Before a new exhibit is shown, asks you "Exhibit or answer in chat?" with WorkSwarm's option dialog, unless your message mentioned an exhibit or you already picked Exhibit in this chat. Edits to an existing exhibit are never asked about. It also confirms deletes in a dialog, keeps HTML pages with scripts out of the file preview panel, and makes sure the agent has read the exhibit skill before showing one.
+- **exhibit (tool)**: Saves exhibits and their versions, opens them in your browser, and reads back what you saved. Actions: `show`, `preset`, `list`, `gallery`, `read`, `open`, `delete` and `stop`.
+- **ExhibitAskRail (rail)**: Before a new exhibit is written, asks you what kind it should be (Document, Slides or No preset) with WorkSwarm's option dialog, plus "Answer in chat" unless your message mentioned an exhibit or you already picked one in this chat. Edits to an existing exhibit are never asked about. It also confirms deletes in a dialog, keeps HTML pages with scripts out of the file preview panel, and makes sure the agent has read the exhibit skill before showing one.
 
 ## How it works
 
@@ -39,10 +40,20 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 ### 0.2.2
 
 - **User interaction improvements:** 
-  - Added the ability for users to quote / refer to a specific exhibit AND a specific highlighted piece of text in an exhibit, when chatting with the agent.
-  - Added parameter to exhibits that stores what session it originally was made in, so agent can retrieve relevant context if needed.
+  - Added the ability for users to quote / refer to a specific exhibit AND a specific highlighted piece of text in an exhibit, when chatting with the agent
+  - Added parameter to exhibits that stores what session it originally was made in, so agent can retrieve relevant context if needed
   - Minor UI improvements
-- **Export** added ability to export the exhibit as HTML, and other file formats depending on the preset. (TODO)
+- **Added Export:** ability to save the exhibit in the form of HTML, PDF and Markdown
+- **Added Presets:** premade templates that the LLM can fill in to create a complete exhibit.
+  - The options so far are documents, slides, and freeform (default). These were added in order to 1. Provide agents with consistency regarding the basic structure of different types of documents, as well as save processing time 2. Allow for more controlled and easily formatted exports to common file formats
+  - Before making any exhibits, the agent rail will ask the user what preset (if any) would they like to select.
+  - Page controls added to the UI
+  - Presets are locked: an exhibit keeps its format (document: Letter pages inside `.sheet`; slides: 16:9 `.slide` sections; or free-form) in every new version, since the page controls and exports depend on it. Edits that break or change the format are refused, and the agent offers a new exhibit in the wanted format instead. Switching an existing exhibit's format isn't supported yet
+  - Preset routing, where the agent can pick which preset to follow, is coming soon
+- **Improvements / Bug Fixes:**
+  - Fixed issue where the user asking to delete multiple exhibits at once will cause user answers to never reach the agent
+  - Fixed issue where documents never got the saved-data bridge as their action-item ticks weren't saved
+  - Fixed issue where the agent saves a page with write_file, then calls show without html_file and gets stuck retrying (seen with deepseek-v4-flash); the rail now fills in the page it just saved
 
 ### 0.2.1
 

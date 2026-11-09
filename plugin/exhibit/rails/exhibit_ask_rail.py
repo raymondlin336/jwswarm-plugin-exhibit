@@ -1,6 +1,8 @@
 """Dialogs and guards for the exhibit tool, enforced in code instead of left to the agent.
 
-1. Format question: asks "exhibit or answer in chat?" before a new exhibit is shown (details below).
+1. Preset question: before a new exhibit is written, the agent calls `exhibit` preset and the user
+   always picks what kind it is: Document, Slides or No preset (details below). A new exhibit
+   can't be shown until they have picked.
 2. Delete confirmation: every `exhibit` delete asks "Delete '<title>'?" in WorkSwarm's dialog.
    Picking Delete lets the call run with confirm set; anything else cancels it.
 3. Preview-panel guard: `send_file_to_user` with an .html file that has scripts is refused once
@@ -14,24 +16,24 @@
    that turn gets a short block naming each referenced exhibit, its id, version, summary and saved
    data, so it knows exactly which exhibit the user means.
 
-Format question:
+Preset question:
 
 The agent can't be relied on to ask first, so this rail does it in code. It
 pauses `exhibit` calls with the same interrupt mechanism WorkSwarm's ask_user
 uses, so the user gets the regular option dialog. The agent never decides
-whether to ask.
+whether to ask, and there is no routing yet: the user always picks.
 
-No question is asked when:
-- the call isn't `show` for a new exhibit (edits with exhibit_id, read, open,
-  list, delete and stop pass straight through);
-- the user's message this turn mentions an exhibit;
-- the user already picked "Exhibit" in this chat, or answered the dialog in
-  their own words this turn.
-
-If the user picks "Exhibit", the paused call runs as it is, so the HTML the agent
-already wrote is used with no extra round trip. If they pick "Answer in chat",
-the call is cancelled and the agent is told to answer in chat instead. The dialog's
-Skip button counts as "you decide" (the exhibit is shown); Cancel stops the call.
+- The `preset` call is paused and the user picks Document, Slides or No preset.
+  The paused call then runs with their pick written into it, so the agent gets
+  that starting page back. Later preset calls before the exhibit is shown reuse it.
+- The dialog also offers "Answer in chat" unless the user's message this turn
+  mentions an exhibit, they already picked a kind of exhibit in this chat, or they
+  answered in their own words this turn. Picking it cancels the call and tells the
+  agent to answer in chat instead.
+- A `show` for a new exhibit is refused until the user has picked, once per new
+  exhibit. Edits with exhibit_id, read, open, list, delete and stop never ask.
+- The dialog's Skip button counts as "you decide": No preset, still an exhibit.
+  Cancel stops the call.
 """
 
 from __future__ import annotations
@@ -67,6 +69,7 @@ except ImportError:  # no prompt sections: references are left to the agent and 
 _TOOL_NAME = "exhibit"
 _SEND_FILE_TOOL = "send_file_to_user"
 _SKILL_TOOL = "skill_tool"
+_WRITE_FILE_TOOL = "write_file"
 _SKILL_NAME = "exhibit"
 _SCRIPT_RE = re.compile(r"<script\b", re.IGNORECASE)
 _MAX_SCAN_BYTES = 5_000_000
@@ -77,30 +80,46 @@ _CJK_RE = re.compile(r"[㐀-鿿]")
 
 _TEXT = {
     "en": {
-        "question": "Should I make this an exhibit or answer in chat?",
-        "header": "Format",
-        "exhibit": "Exhibit",
-        "exhibit_desc": "An interactive page in your browser that I can update and that keeps what you enter",
+        "preset_question": "What kind of exhibit should this be?",
+        "preset_or_chat_question": "Should I make this an exhibit, and which kind?",
+        "preset_header": "Exhibit",
+        "document": "Document",
+        "document_desc": "A page that prints well: report, brief, memo or meeting notes",
+        "slides": "Slides",
+        "slides_desc": "A slide deck you click through, one slide per printed page",
+        "no_preset": "No preset",
+        "no_preset_desc": "A free-form page: chart, dashboard, calculator, tracker, prototype or anything else",
         "chat": "Answer in chat",
         "chat_desc": "A static chart (SVG or PNG), a table, or a document (PDF, Word or Excel) here in the conversation",
         "delete_question": "Delete \u201c{title}\u201d?",
         "delete_header": "Delete",
         "delete": "Delete",
         "delete_desc": "Permanently delete it, with all its versions and saved data",
+        "delete_many_question": "Delete these {count} exhibits? {titles}",
+        "delete_many_desc": "Permanently delete all of them, with their versions and saved data",
+        "delete_more": " and {count} more",
         "keep": "Keep it",
         "keep_desc": "Don't delete anything",
     },
     "zh": {
-        "question": "要做成展品，还是直接在对话中回答？",
-        "header": "形式",
-        "exhibit": "展品",
-        "exhibit_desc": "在浏览器中打开的交互页面，我可以继续修改，并会保存你填写的内容",
+        "preset_question": "这个展品要做成哪种形式？",
+        "preset_or_chat_question": "要做成展品吗？做成哪种？",
+        "preset_header": "展品",
+        "document": "文档",
+        "document_desc": "适合打印的页面：报告、简报、备忘录或会议纪要",
+        "slides": "幻灯片",
+        "slides_desc": "可逐页翻看的演示文稿，打印时每页一张",
+        "no_preset": "不用预设",
+        "no_preset_desc": "自由页面：图表、仪表盘、计算器、跟踪表、原型等",
         "chat": "在对话中回答",
         "chat_desc": "在对话中给出静态图表（SVG 或 PNG）、表格，或文档（PDF、Word 或 Excel）",
         "delete_question": "删除\u201c{title}\u201d？",
         "delete_header": "删除",
         "delete": "删除",
         "delete_desc": "永久删除它及其所有版本和保存的数据",
+        "delete_many_question": "删除这 {count} 个展品？{titles}",
+        "delete_many_desc": "永久删除它们及其所有版本和保存的数据",
+        "delete_more": " 等另外 {count} 个",
         "keep": "保留",
         "keep_desc": "不删除任何内容",
     },
@@ -112,12 +131,18 @@ _CHOSE_CHAT = (
     "The HTML you wrote was not shown."
 )
 _FREE_TEXT = (
-    "[USER_REPLIED] The user was asked whether they want an exhibit or an answer in chat, and replied "
-    "in their own words: {answer!r}. Follow their reply. If they want an exhibit, call exhibit again "
-    "(you won't be asked again this turn); otherwise answer in chat."
+    "[USER_REPLIED] The user was asked what kind of exhibit they want (document, slides or no preset), "
+    "and replied in their own words: {answer!r}. Follow their reply. If they want an exhibit, call "
+    "exhibit preset again with the name that fits (document, slides or none); you won't be asked again "
+    "this turn. Otherwise answer in chat."
+)
+_CHOOSE_PRESET = (
+    "[CHOOSE_PRESET] Not shown yet: before a new exhibit, call exhibit with action preset (no name "
+    "needed). The user picks a document, slides or no preset, and you get the starting page. Write the "
+    "exhibit from it, then call show again."
 )
 _CANCELLED = (
-    "[USER_CANCELLED] The user dismissed the question about showing an exhibit without answering. "
+    "[USER_CANCELLED] The user dismissed the question about what kind of exhibit to make without answering. "
     "Nothing was shown. Don't call exhibit again for this request; reply briefly in chat and let "
     "them say how they'd like it."
 )
@@ -133,6 +158,12 @@ _KEPT = (
 _DELETE_REPLIED = (
     "[USER_REPLIED] The user was asked to confirm deleting the exhibit and replied in their own words: "
     "{answer!r}. Nothing was deleted. Follow their reply; if they do want it deleted, call delete again."
+)
+_ONE_AT_A_TIME = (
+    "[ONE_AT_A_TIME] Not done yet: the user is already being asked about another exhibit call, and only "
+    "one question can wait for an answer at a time. Nothing happened for this call. Once that answer "
+    "is back, call this again if it's still wanted. To delete several exhibits, call delete once with "
+    "all of them in exhibit_ids: the user confirms them together."
 )
 _USE_EXHIBIT = (
     "[USE_EXHIBIT] Not sent: {files} is HTML with scripts, and WorkSwarm's file preview panel blocks "
@@ -214,15 +245,16 @@ def _chat_alternative(args: dict[str, Any]) -> str:
     return text
 
 
-def _question(language: str, alternative: str = "") -> dict[str, Any]:
+def _question(language: str, with_chat: bool, alternative: str = "") -> dict[str, Any]:
+    """The preset question, with "Answer in chat" as a fourth option when that's still open."""
     t = _TEXT[language]
+    options = [{"label": t[key], "description": t[f"{key}_desc"]} for key in _PRESET_KEYS]
+    if with_chat:
+        options.append({"label": t["chat"], "description": alternative or t["chat_desc"]})
     return {
-        "question": t["question"],
-        "header": t["header"],
-        "options": [
-            {"label": t["exhibit"], "description": t["exhibit_desc"]},
-            {"label": t["chat"], "description": alternative or t["chat_desc"]},
-        ],
+        "question": t["preset_or_chat_question" if with_chat else "preset_question"],
+        "header": t["preset_header"],
+        "options": options,
         "multi_select": False,
     }
 
@@ -249,13 +281,16 @@ def _labels(*keys: str) -> dict[str, str]:
     return {text[key].casefold(): key for text in _TEXT.values() for key in keys}
 
 
-_FORMAT_LABELS = _labels("exhibit", "chat")
+# Dialog option -> the preset name the tool takes.
+_PRESET_KEYS = {"document": "document", "slides": "slides", "no_preset": "none"}
+_PRESET_LABELS = _labels(*_PRESET_KEYS, "chat")
 _DELETE_LABELS = _labels("delete", "keep")
+
 
 
 def _classify(user_input: Any, labels: dict[str, str] | None = None) -> tuple[str, str]:
     """Return (a key from labels | "skip" | "cancel" | "text" | "empty", answer text)."""
-    labels = _FORMAT_LABELS if labels is None else labels
+    labels = _PRESET_LABELS if labels is None else labels
     values = _answer_values(user_input)
     if not values:
         return "empty", ""
@@ -269,17 +304,51 @@ def _classify(user_input: Any, labels: dict[str, str] | None = None) -> tuple[st
     return "text", "; ".join(values)
 
 
-def _delete_question(language: str, title: str) -> dict[str, Any]:
+_MAX_LISTED_TITLES = 12
+
+
+def _delete_question(language: str, titles: list[str] | str) -> dict[str, Any]:
+    """One question for one exhibit or several (a bulk delete lists them all in one dialog)."""
     t = _TEXT[language]
+    titles = [titles] if isinstance(titles, str) else list(titles)
+    if len(titles) == 1:
+        question, desc = t["delete_question"].format(title=titles[0]), t["delete_desc"]
+    else:
+        shown = ", ".join(f"“{title}”" for title in titles[:_MAX_LISTED_TITLES])
+        more = len(titles) - _MAX_LISTED_TITLES
+        if more > 0:
+            shown += t["delete_more"].format(count=more)
+        question = t["delete_many_question"].format(count=len(titles), titles=shown)
+        desc = t["delete_many_desc"]
     return {
-        "question": t["delete_question"].format(title=title),
+        "question": question,
         "header": t["delete_header"],
         "options": [
-            {"label": t["delete"], "description": t["delete_desc"]},
+            {"label": t["delete"], "description": desc},
             {"label": t["keep"], "description": t["keep_desc"]},
         ],
         "multi_select": False,
     }
+
+
+def _delete_ids(args: dict[str, Any]) -> list[str]:
+    """The exhibits a delete call names: exhibit_ids (a list, or a JSON list) and/or exhibit_id."""
+    raw = args.get("exhibit_ids")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            raw = [raw]
+    ids = [x for x in raw if isinstance(x, str) and x.strip()] if isinstance(raw, list) else []
+    if isinstance(args.get("exhibit_id"), str) and args["exhibit_id"].strip():
+        ids.insert(0, args["exhibit_id"])
+    return list(dict.fromkeys(ids))
+
+
+def _delete_titles(args: dict[str, Any]) -> list[str]:
+    """Titles of the exhibits a delete call would remove (ones that don't exist are left out)."""
+    titles = [_exhibit_title(x) for x in _delete_ids(args)]
+    return [title for title in titles if title is not None]
 
 
 _REF_SECTION = "exhibit_references"
@@ -330,6 +399,7 @@ def _exhibit_title(exhibit_id: Any) -> str | None:
         return None
     title = meta.get("title")
     return title if isinstance(title, str) and title else folder.name
+
 
 
 def _find_references(text: Any) -> list[dict[str, Any]]:
@@ -424,12 +494,9 @@ def _scripted_html(paths: list[str]) -> list[str]:
     return found
 
 
-def _should_ask(args: dict[str, Any], gate: dict[str, Any]) -> bool:
-    if not _is_new_show(args):
-        return False
-    if gate.get("chose_exhibit") or gate.get("mentioned_this_turn") or gate.get("replied_this_turn"):
-        return False
-    return True
+def _offer_chat(gate: dict[str, Any]) -> bool:
+    """Whether the user still might want an answer in chat rather than an exhibit."""
+    return not (gate.get("chose_exhibit") or gate.get("mentioned_this_turn") or gate.get("replied_this_turn"))
 
 
 # ------------------------------------------------------------------- rail
@@ -474,7 +541,7 @@ class ExhibitAskRail(BaseInterruptRail):
 
     def __init__(self) -> None:
         if _INTERRUPTS_AVAILABLE:
-            super().__init__(tool_names=[_TOOL_NAME, _SEND_FILE_TOOL, _SKILL_TOOL])
+            super().__init__(tool_names=[_TOOL_NAME, _SEND_FILE_TOOL, _SKILL_TOOL, _WRITE_FILE_TOOL])
         else:
             super().__init__()
 
@@ -543,6 +610,7 @@ class ExhibitAskRail(BaseInterruptRail):
             warned_files=[],
             asked=None,
             references=_find_references(query),
+            preset=None,
             language=_language(query),
         )
         self._save_gate(ctx, gate)
@@ -557,13 +625,18 @@ class ExhibitAskRail(BaseInterruptRail):
             return
         succeeded, error = outcome
         gate = self._gate(ctx)
+        raw = getattr(inputs, "tool_args", None) or getattr(getattr(inputs, "tool_call", None), "arguments", None)
+        args = _parse_args(raw)
         if succeeded:
-            if gate.get("failures"):
-                gate["failures"] = {}
+            changed = bool(gate.get("failures"))
+            gate["failures"] = {}
+            if _is_new_show(args) and gate.get("preset"):
+                gate["preset"] = None  # each new exhibit gets its own pick
+                changed = True
+            if changed:
                 self._save_gate(ctx, gate)
             return
-        raw = getattr(inputs, "tool_args", None) or getattr(getattr(inputs, "tool_call", None), "arguments", None)
-        shape = _call_shape(_parse_args(raw))
+        shape = _call_shape(args)
         failures = dict(gate.get("failures") or {})
         entry = failures.get(shape) or {"count": 0}
         failures[shape] = {"count": int(entry.get("count", 0)) + 1, "error": error}
@@ -571,7 +644,15 @@ class ExhibitAskRail(BaseInterruptRail):
         self._save_gate(ctx, gate)
 
     def _ask(self, ctx: Any, gate: dict[str, Any], call_id: str, question: dict[str, Any]) -> Any:
-        """Pause this call and show one question; remember which call we asked about."""
+        """Pause this call and show one question; remember which call we asked about.
+
+        Only one question at a time: WorkSwarm shows every pending dialog but accepts an answer only
+        for the one it's waiting on ("session has no active execution" for the rest). So when the
+        agent makes several asking calls in one step (8 deletes, say), the first one asks and the
+        others are turned back to be retried after the answer.
+        """
+        if gate.get("asked") and gate.get("asked") != call_id:
+            return self.reject(tool_result=_ONE_AT_A_TIME)
         gate["asked"] = call_id
         self._save_gate(ctx, gate)
         return self.interrupt(
@@ -606,6 +687,22 @@ class ExhibitAskRail(BaseInterruptRail):
                 return self.reject(tool_result=_USE_EXHIBIT.format(files=", ".join(scripted)))
             return self.approve()
 
+        if name == _WRITE_FILE_TOOL:
+            # Remember the last page the agent saved: some models then call show without html_file.
+            path = args.get("file_path") or args.get("path")
+            if isinstance(path, str) and Path(path).suffix.lower() in (".html", ".htm"):
+                gate["saved_page"] = path
+                self._save_gate(ctx, gate)
+            return self.approve()
+
+        if args.get("action") == "show" and not (args.get("html") or args.get("html_file")):
+            # A show with no page can't work. If the agent saved a page with write_file, that's the one
+            # it meant (deepseek models often drop html_file after write_file): fill it in.
+            saved = gate.get("saved_page")
+            if isinstance(saved, str) and Path(saved).is_file():
+                self._rewritten_args(tool_call, args, html_file=saved)
+                args = {**args, "html_file": saved}
+
         # The exhibit tool. A waiting answer is ours only if we asked about this very call;
         # anything else belongs to another rail and is left alone.
         if user_input is not None and call_id and gate.get("asked") == call_id:
@@ -613,7 +710,7 @@ class ExhibitAskRail(BaseInterruptRail):
             gate["asked"] = None
             if args.get("action") == "delete":
                 return self._after_delete_answer(ctx, gate, args, tool_call, user_input)
-            return self._after_format_answer(ctx, gate, args, call_id, user_input)
+            return self._after_preset_answer(ctx, gate, args, tool_call, user_input)
 
         failed = (gate.get("failures") or {}).get(_call_shape(args))
         if failed and int(failed.get("count", 0)) >= _MAX_SAME_FAILURES:
@@ -621,33 +718,41 @@ class ExhibitAskRail(BaseInterruptRail):
 
         action = args.get("action")
         if action == "delete":
-            title = _exhibit_title(args.get("exhibit_id"))
-            if title is None:
+            titles = _delete_titles(args)
+            if not titles:
                 return self.approve()  # the tool reports that it doesn't exist
-            return self._ask(ctx, gate, call_id, _delete_question(language, title))
-        if action != "show":
+            return self._ask(ctx, gate, call_id, _delete_question(language, titles))
+        if action not in ("show", "preset"):
             return self.approve()
         if self._stateful(ctx) and not gate.get("skill_loaded"):
             return self.reject(tool_result=_LOAD_SKILL)
-        if not _is_new_show(args):
-            return self.approve()
+        if action == "show" and not _is_new_show(args):
+            return self.approve()  # an edit: the tool keeps the exhibit's format (preset_locked otherwise)
         if gate.get("declined_this_turn"):
             return self.reject(tool_result=_DECLINED_THIS_TURN)
-        if not _should_ask(args, gate):
+        if action == "show":
+            if self._stateful(ctx) and not gate.get("preset"):
+                return self.reject(tool_result=_CHOOSE_PRESET)
             return self.approve()
-        return self._ask(ctx, gate, call_id, _question(language, _chat_alternative(args)))
+        # action == "preset"
+        chosen = gate.get("preset")
+        if chosen == "replied":
+            return self.approve()  # they answered in their own words; the agent picks the name
+        if chosen:
+            return self.approve(new_args=self._rewritten_args(tool_call, args, name=chosen))
+        return self._ask(ctx, gate, call_id, _question(language, _offer_chat(gate), _chat_alternative(args)))
 
     @staticmethod
-    def _confirmed_args(tool_call: Any, args: dict[str, Any]) -> str:
-        """Add confirm: true to the call itself, not just this rail's copy of its arguments.
+    def _rewritten_args(tool_call: Any, args: dict[str, Any], **changes: Any) -> str:
+        """Change the call's own arguments (e.g. confirm: true), not just this rail's copy of them.
 
         WorkSwarm's StreamEventRail runs after this rail and rebuilds ctx.inputs.tool_args from
-        tool_call.arguments, so a change to tool_args alone is lost and the tool refuses the delete.
+        tool_call.arguments, so a change to tool_args alone is lost (and the tool refuses a delete).
         """
-        confirmed = {**args, "confirm": True}
-        text = json.dumps(confirmed, ensure_ascii=False)
+        changed = {**args, **changes}
+        text = json.dumps(changed, ensure_ascii=False)
         try:
-            tool_call.arguments = confirmed if isinstance(tool_call.arguments, dict) else text
+            tool_call.arguments = changed if isinstance(tool_call.arguments, dict) else text
         except (AttributeError, TypeError):
             pass
         return text
@@ -658,24 +763,24 @@ class ExhibitAskRail(BaseInterruptRail):
         choice, answer = _classify(user_input, _DELETE_LABELS)
         self._save_gate(ctx, gate)
         if choice == "delete":
-            return self.approve(new_args=self._confirmed_args(tool_call, args))
+            return self.approve(new_args=self._rewritten_args(tool_call, args, confirm=True))
         if choice == "text":
             return self.reject(tool_result=_DELETE_REPLIED.format(answer=answer))
         if choice == "empty":
-            title = _exhibit_title(args.get("exhibit_id")) or args.get("exhibit_id", "")
-            return self._ask(ctx, gate, call_id, _delete_question(gate.get("language", "en"), title))
+            titles = _delete_titles(args) or [str(args.get("exhibit_id", ""))]
+            return self._ask(ctx, gate, call_id, _delete_question(gate.get("language", "en"), titles))
         return self.reject(tool_result=_KEPT)  # Keep it, Skip or Cancel: never delete by default
 
-    def _after_format_answer(self, ctx: Any, gate: dict[str, Any], args: dict[str, Any], call_id: str,
+    def _after_preset_answer(self, ctx: Any, gate: dict[str, Any], args: dict[str, Any], tool_call: Any,
                              user_input: Any) -> Any:
-        choice, answer = _classify(user_input, _FORMAT_LABELS)
-        if choice == "exhibit":
-            gate["chose_exhibit"] = True
+        call_id = getattr(tool_call, "id", "") or ""
+        choice, answer = _classify(user_input, _PRESET_LABELS)
+        if choice in _PRESET_KEYS or choice == "skip":
+            if choice != "skip":
+                gate["chose_exhibit"] = True  # Skip means "you decide": an exhibit, but ask again next time
+            gate["preset"] = _PRESET_KEYS.get(choice, "none")
             self._save_gate(ctx, gate)
-            return self.approve()
-        if choice == "skip":
-            self._save_gate(ctx, gate)
-            return self.approve()  # "you decide": show the exhibit, but ask again next time
+            return self.approve(new_args=self._rewritten_args(tool_call, args, name=gate["preset"]))
         if choice in ("cancel", "chat"):
             gate["declined_this_turn"] = True
             self._save_gate(ctx, gate)
@@ -686,7 +791,9 @@ class ExhibitAskRail(BaseInterruptRail):
             return self.reject(tool_result=_CHOSE_CHAT.format(offered=offered))
         if choice == "text":
             gate["replied_this_turn"] = True
+            gate["preset"] = "replied"
             self._save_gate(ctx, gate)
             return self.reject(tool_result=_FREE_TEXT.format(answer=answer))
         # Empty answer: ask again rather than guess.
-        return self._ask(ctx, gate, call_id, _question(gate.get("language", "en"), _chat_alternative(args)))
+        language = gate.get("language", "en")
+        return self._ask(ctx, gate, call_id, _question(language, _offer_chat(gate), _chat_alternative(args)))

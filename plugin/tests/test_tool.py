@@ -7,6 +7,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import types
@@ -70,6 +71,132 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIsNotNone(MOD.ToolExposure)
         self.assertEqual(self.tool.card.exposure, MOD.ToolExposure.DIRECT)
 
+    # Presets -----------------------------------------------------------------
+    def test_preset_returns_the_starting_page(self):
+        for name in ("document", "slides"):
+            result = self.call(action="preset", name=name)
+            self.assertTrue(result["success"], result)
+            self.assertEqual(result["preset"], name)
+            self.assertRegex(result["html"], f'<meta name="exhibit-preset" content="{name}@\\d+">')
+            self.assertIn("show", result["next"])
+        none = self.call(action="preset", name="None ")
+        self.assertEqual((none["preset"], "html" in none), ("none", False))
+
+    def test_preset_without_a_name_lists_them_and_bad_names_fail(self):
+        listed = self.call(action="preset")
+        self.assertEqual([p["name"] for p in listed["presets"]], ["document", "slides", "none"])
+        bad = self.call(action="preset", name="poster")
+        self.assertEqual((bad["success"], bad["error_code"]), (False, "invalid_preset"))
+        self.assertEqual(self.tool.card.input_params["properties"]["name"]["enum"], ["document", "slides", "none"])
+
+    def test_preset_files_follow_the_exhibit_rules(self):
+        for name in ("document", "slides"):
+            page = (MOD._PRESET_DIR / f"{name}.html").read_text(encoding="utf-8")
+            self.assertTrue(page.startswith("<!doctype html>"), name)
+            # Theme: light by default, dark only for the screen theme, and paper always light.
+            self.assertIn("@media (prefers-color-scheme: dark)", page, name)
+            self.assertIn("@media print", page, name)
+            # CSP: nothing loaded from the network, so nothing for the page's CSP to block.
+            self.assertNotRegex(page, r'(?:src|href)\s*=\s*"(?:https?:)?//', name)
+            self.assertNotRegex(page, r"@import|url\(\s*['\"]?https?:", name)
+            self.assertNotRegex(page, r"\bfetch\(|XMLHttpRequest|localStorage", name)
+            # The guidance comment stays a single comment.
+            comment = page.split("<!--", 1)[1].split("-->", 1)[0]
+            self.assertNotIn("--", comment, name)
+            # Served through the viewer with the saved-data bridge, like any exhibit.
+            shown = self.show(title=f"Preset {name}", html=page)
+            status, _, served = _http(shown["url"].replace("/e/", "/raw/") + "/1")
+            self.assertEqual(status, 200)
+            self.assertIn("window.exhibit", served)
+
+    def test_titles_show_what_kind_of_exhibit_it_is(self):
+        doc = self.show(title="Report", html=(MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8"))
+        deck = self.show(title="Deck", html=(MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8"))
+        plain = self.show(title="Plain")
+        kinds = {r["exhibit_id"]: MOD._exhibit_kind(MOD._load_meta(r["exhibit_id"])) for r in (doc, deck, plain)}
+        self.assertEqual(list(kinds.values()), ["document", "slides", "exhibit"])
+        viewer = _http(doc["url"])[2]
+        self.assertIn('class="kind kind-document"', viewer.split('id="title"')[0].rsplit("<header", 1)[1])
+        # PDF export is offered for documents and slides only, by the kind of the version shown.
+        self.assertIn('if (true) formats.push({ label: "PDF (.pdf)"', viewer)
+        self.assertIn("if (false) formats.push", _http(plain["url"])[2])
+        self.assertIn("if (true) formats.push", _http(deck["url"])[2])
+        gallery = _http(doc["url"].split("/e/")[0] + "/")[2]
+        self.assertEqual(gallery.count('class="kind kind-document"'), 3)  # card, list row, open tab
+        self.assertIn('"kind": "exhibit"', gallery)  # for search results
+
+    def test_an_exhibit_never_changes_format(self):
+        doc_page = (MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8")
+        deck_page = (MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8")
+        doc = self.show(title="Report", html=doc_page)
+        deck = self.show(title="Deck", html=deck_page)
+        plain = self.show(title="Plain")
+        self.assertEqual((doc["preset"], deck["preset"], plain["preset"]), ("document", "slides", "none"))
+        meta = lambda r: MOD._load_meta(r["exhibit_id"])
+        self.assertEqual(meta(doc)["versions"][0]["preset"], "document")  # recorded with the version
+        # An edit that keeps the format is fine.
+        self.assertTrue(self.show(exhibit_id=doc["exhibit_id"], html=doc_page.replace("Q3 2026", "Q4"))["success"])
+        # Any change of format is refused, in every direction, and nothing is saved.
+        for exhibit, page in ((doc, "<h1>One long page</h1>"), (doc, deck_page), (deck, doc_page),
+                              (deck, "<p>all slides in one page</p>"), (plain, doc_page), (plain, deck_page)):
+            refused = self.call(action="show", exhibit_id=exhibit["exhibit_id"], html=page)
+            self.assertEqual(refused["error_code"], "preset_locked", (exhibit["title"], page[:30]))
+            self.assertIn("make a new exhibit in the format they want", refused["error"])
+        self.assertEqual([len(meta(r)["versions"]) for r in (doc, deck, plain)], [2, 1, 1])
+        # A page that claims a preset must have its structure.
+        broken = doc_page.replace('<article class="sheet">', "<article>")
+        self.assertEqual(self.call(action="show", exhibit_id=doc["exhibit_id"], html=broken)["error_code"],
+                         "preset_structure")
+        self.assertNotIn("convert_to", self.tool.card.input_params["properties"])  # no switching for now
+        # The plugin's locked geometry for decks.
+        raw = _http(deck["url"].replace("/e/", "/raw/") + "/1")[2]
+        self.assertIn("@page{size:13.333in 7.5in!important", raw)
+        self.assertIn(".slide{aspect-ratio:16/9!important}", raw)
+
+    def test_slides_preset_has_no_controls_of_its_own_and_fits_its_text(self):
+        page = (MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8")
+        # Printing is in Export, and moving between slides is added by Exhibit, not written in the deck.
+        self.assertNotIn('class="controls"', page)
+        self.assertNotIn('class="edge', page)
+        self.assertNotIn("print()", page)
+        self.assertNotIn('bridge.set("slide"', page)
+        self.assertIn("const fit = (slide)", page)
+        self.assertIn(".slide.overfull > .in { overflow-y: auto; }", page)
+        self.assertNotIn("40 words", page)
+
+    def test_pages_and_slides_get_navigation_from_exhibit_not_the_page(self):
+        deck = self.show(title="Deck", html=(MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8"))
+        doc = self.show(title="Report", html=(MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8"))
+        plain = self.show(title="Plain")
+        raw = lambda r, extra="": _http(r["url"].replace("/e/", "/raw/") + "/1" + extra)[2]
+        # Decks get slide navigation (also in thumbnails, to show the first slide); documents get pages.
+        self.assertIn("const standalone = parent === window, thumbnail = false", raw(deck))
+        self.assertIn("thumbnail = true", raw(deck, "?thumb=1"))
+        self.assertIn("const W = 816, H = 1056", raw(doc))
+        for page in (raw(deck), raw(doc)):
+            self.assertIn('channel: "exhibit-pages"', page)
+        self.assertNotIn("exhibit-pages", raw(plain))
+        # The scripts land in the real <head>, not in the preset's guidance comment (which mentions
+        # <header>), so the saved-data bridge works in documents too.
+        for page in (raw(deck), raw(doc)):
+            comment_end = page.index("-->")
+            self.assertGreater(page.index("window.exhibit = {"), comment_end)
+        # The top bar has the page control for documents and slides only.
+        self.assertIn('id="pager"', _http(deck["url"])[2])
+        self.assertIn('aria-label="Current slide"', _http(deck["url"])[2])
+        self.assertIn('aria-label="Current page"', _http(doc["url"])[2])
+        self.assertNotIn('id="pager"', _http(plain["url"])[2])
+        # An exported deck brings its own buttons; an exported document its pages.
+        self.assertIn("exhibit-slide-nav", MOD._export_html(deck["exhibit_id"], None)[1])
+        self.assertIn("exhibit-page-stage", MOD._export_html(doc["exhibit_id"], None)[1])
+        self.assertNotIn("exhibit-slide-nav", MOD._export_html(plain["exhibit_id"], None)[1])
+
+    @unittest.skipUnless(MOD._pdf_browser(), "needs Edge or Chrome")
+    def test_pdf_of_a_document_is_letter_pages(self):
+        doc = self.show(title="Report", html=(MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8"))
+        _, pdf = MOD._export_pdf(doc["exhibit_id"], None)
+        self.assertEqual(set(re.findall(rb"/MediaBox\s*\[([^\]]*)\]", pdf)), {b"0 0 612 792"})
+
     def test_duplicate_names_get_numbered(self):
         first = self.show(title="Benchmark results")
         second = self.show(title="Benchmark results")
@@ -129,6 +256,19 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertEqual(self.call(action="delete", exhibit_id=exhibit["exhibit_id"])["error_code"], "confirmation_required")
         self.assertTrue(self.call(action="delete", exhibit_id=exhibit["exhibit_id"], confirm=True)["success"])
         self.assertEqual(self.call(action="list")["exhibits"], [])
+
+    def test_bulk_delete_removes_several_at_once(self):
+        ids = [self.show(title=t)["exhibit_id"] for t in ("One", "Two", "Three")]
+        keep = self.show(title="Keep")["exhibit_id"]
+        names = [ids[0], "#" + ids[1].rsplit("-", 1)[1], ids[2], "gone-000000"]
+        refused = self.call(action="delete", exhibit_ids=names)
+        self.assertEqual(refused["error_code"], "confirmation_required")
+        result = self.call(action="delete", exhibit_ids=json.dumps(names), confirm=True)  # a JSON string works too
+        self.assertEqual(result["deleted"], ids)
+        self.assertEqual(result["not_found"], ["gone-000000"])
+        self.assertEqual([e["exhibit_id"] for e in self.call(action="list")["exhibits"]], [keep])
+        self.assertEqual(self.call(action="delete", exhibit_ids=[], confirm=True)["error_code"], "invalid_input")
+        self.assertIn("exhibit_ids", self.tool.card.input_params["properties"])
 
     def test_read_returns_data_and_html(self):
         exhibit = self.show()
@@ -191,6 +331,68 @@ class ExhibitToolTests(unittest.TestCase):
         not_there = code(html_file=str(Path(self.tmp.name, "nope.html")))
         self.assertEqual(not_there["error_code"], "file_not_found")
         self.assertIn("write_file", not_there["error"])
+
+    def test_markdown_export_of_a_document(self):
+        doc = self.show(title="Q3 report", html=(MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8"))
+        name, md, files = MOD._export_markdown(doc["exhibit_id"], None)
+        self.assertEqual((name, files), ("Q3 report.md", {}))
+        self.assertIn("# Support response times, Q3 2026", md)
+        self.assertIn("## 1. Background", md)  # sections numbered like on the page
+        self.assertIn("> [!note] Summary\n> - Median first response", md)  # Obsidian-style callouts
+        self.assertIn("> [!warning] Risk", md)
+        self.assertIn("| Channel | Tickets | Weekday | Weekend | Satisfaction |\n| --- | ---: |", md)
+        self.assertIn("| **All channels** | **14,751** |", md)  # totals row
+        self.assertIn("**Table 1.** Median hours", md)
+        self.assertIn("**Figure 1.** Median hours", md)
+        self.assertIn("![Median first response in hours, by month, 2025 and 2026](data:image/svg+xml;base64,", md)
+        self.assertNotIn("Contents", md)  # the contents list is built by a script on the page
+        # The embedded chart is a standalone SVG with the page's chart colors filled in.
+        import base64
+        svg = base64.b64decode(re.search(r"data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)", md).group(1)).decode()
+        self.assertIn('xmlns="http://www.w3.org/2000/svg"', svg)
+        self.assertIn('viewBox="0 0 640 230"', svg)  # attribute case kept
+        self.assertIn(".chart .bar { fill: #2b59c3; }", svg)
+        # The .zip has the same text with the chart as a file.
+        zip_name, data = MOD._export_markdown_zip(doc["exhibit_id"], None)
+        import io
+        import zipfile
+        archive = zipfile.ZipFile(io.BytesIO(data))
+        self.assertEqual(zip_name, "Q3 report.zip")
+        self.assertEqual(sorted(archive.namelist()), ["Q3 report.md", "images/figure-1.svg"])
+        self.assertIn("](images/figure-1.svg)", archive.read("Q3 report.md").decode())
+        # Served as downloads, and offered in the Export menu for documents only.
+        base = doc["url"].split("/e/")[0]
+        status, headers, body = _http(f"{base}/api/{doc['exhibit_id']}/export?format=md")
+        self.assertEqual((status, headers["Content-Type"]), (200, "text/markdown; charset=utf-8"))
+        self.assertIn("filename*=UTF-8''Q3%20report.md", headers["Content-Disposition"])
+        with _NO_PROXY.open(urllib.request.Request(f"{base}/api/{doc['exhibit_id']}/export?format=md-zip"), timeout=10) as r:
+            self.assertEqual(r.headers["Content-Type"], "application/zip")
+        self.assertIn('label: "Markdown with images (.zip)"', _http(doc["url"])[2])
+        self.assertIn("if (true) formats.push(\n    { label: \"Markdown (.md)\"", _http(doc["url"])[2])
+        self.assertIn("if (false) formats.push(\n    { label: \"Markdown (.md)\"", _http(self.show(title="Plain")["url"])[2])
+
+    def test_markdown_handles_memo_notes_and_brief_parts(self):
+        page = """<!doctype html><html><head><meta name="exhibit-preset" content="document@2"></head><body>
+<article class="sheet"><header class="top"><p class="eyebrow">Brief</p><h1>Launch</h1>
+<ul class="meta"><li><b>For</b> Steering</li><li><b>Date</b> Nov</li></ul><span class="pill at-risk">At risk</span></header>
+<section class="stats"><div class="stat"><div class="v">78%</div><div class="k">Done</div><div class="d up">+12 pts</div></div>
+<div class="stat"><div class="v">3</div><div class="k">Blockers</div></div></section>
+<dl class="memo-head"><dt>To</dt><dd>All staff</dd><dt>Subject</dt><dd>Rota</dd></dl>
+<ul class="people"><li class="person">Ana</li><li class="person absent">Ben</li></ul>
+<ul><li>Spent 40%<ul><li>Nested with <code>a|b</code> and a <a href="https://example.com">link</a></li></ul></li></ul>
+<p class="decision">Keep it.</p>
+<table class="actions"><tbody><tr data-id="a1"><td><input type="checkbox"></td><td>Publish</td><td>Ana</td><td>10 Nov</td></tr>
+<tr data-id="a2"><td><input type="checkbox"></td><td>Book</td><td>Ben</td><td>12 Nov</td></tr></tbody></table>
+<p>Costs $5 * 2 [not a link] and 50_000.</p></article></body></html>"""
+        doc = self.show(title="Notes", html=page)
+        MOD._exhibit_dir(doc["exhibit_id"]).joinpath("data.json").write_text('{"done": ["a1"]}', encoding="utf-8")
+        md = MOD._export_markdown(doc["exhibit_id"], None)[1]
+        for expected in ("*Brief*\n\n# Launch", "**For** Steering · **Date** Nov", "**At risk**",
+                         "- **78%** Done (+12 pts)\n- **3** Blockers", "**To:** All staff  \n**Subject:** Rota",
+                         "Ana · Ben (absent)", "- Spent 40%\n    - Nested with `a|b` and a [link](https://example.com)",
+                         "**Decision:** Keep it.", "- [x] Publish (Ana, 10 Nov)\n- [ ] Book (Ben, 12 Nov)",
+                         r"Costs $5 \* 2 \[not a link\] and 50\_000."):
+            self.assertIn(expected, md)
 
     def test_results_include_the_reference(self):
         exhibit = self.show(title="Benchmark scores by app")
@@ -267,6 +469,38 @@ class ExhibitToolTests(unittest.TestCase):
         viewer = _http(exhibit["url"])[2]
         self.assertIn('id="export"', viewer)
         self.assertIn('label: "HTML file (.html)"', viewer)
+        self.assertIn("if (false) formats.push", viewer)  # no PDF for an exhibit made without a preset
+        # The page prints itself when the viewer asks.
+        raw = _http(exhibit["url"].replace("/e/", "/raw/") + "/1")[2]
+        self.assertIn('m.channel === "exhibit-print"', raw)
+
+    @unittest.skipUnless(MOD._pdf_browser(), "needs Edge or Chrome")
+    def test_pdf_export_prints_slides_at_slide_size(self):
+        deck = self.show(title="Deck: Q3 / review", html=(MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8"))
+        base = deck["url"].split("/e/")[0]
+        url = f"{base}/api/{deck['exhibit_id']}/export?format=pdf"
+        with _NO_PROXY.open(urllib.request.Request(url), timeout=60) as r:
+            self.assertEqual(r.headers["Content-Type"], "application/pdf")
+            self.assertIn("filename*=UTF-8''Deck%20Q3%20review.pdf", r.headers["Content-Disposition"])
+            pdf = r.read()
+        self.assertTrue(pdf.startswith(b"%PDF"))
+        # Eight sample slides, each one 13.333 x 7.5 in page.
+        self.assertEqual(len(re.findall(rb"/Type\s*/Page[^s]", pdf)), 8)
+        self.assertEqual(set(re.findall(rb"/MediaBox\s*\[([^\]]*)\]", pdf)), {b"0 0 960 540"})
+
+    def test_pdf_export_without_a_browser_says_so(self):
+        exhibit = self.show()
+        base = exhibit["url"].split("/e/")[0]
+        real = MOD._pdf_browser
+        MOD._pdf_browser = lambda: None
+        try:
+            status, _, body = _http(f"{base}/api/{exhibit['exhibit_id']}/export?format=pdf")
+        finally:
+            MOD._pdf_browser = real
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body)["error_code"], "pdf_unavailable")
+        viewer = _http(exhibit["url"])[2]
+        self.assertIn('frame.contentWindow.postMessage({ channel: "exhibit-print" }', viewer)  # the fallback
 
     def test_new_codes_are_unique(self):
         first = self.show(title="Alpha")["exhibit_id"]
@@ -437,8 +671,11 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn('id="item-menu"', gallery)
         self.assertIn('id="modal"', gallery)
         viewer = _http(exhibit["url"])[2]
-        self.assertIn('id="exhibit-more"', viewer)
-        self.assertNotIn('label: "Rename"', viewer)  # only delete in the exhibit bar
+        self.assertNotIn('id="exhibit-more"', viewer)  # the exhibit bar has no ⋯ menu
+        self.assertNotIn('label: "Rename"', viewer)
+        # Export is an icon button like the others, with no label or arrow.
+        self.assertIn('<button class="bar-icon" id="export"', viewer)
+        self.assertNotIn("<span>Export</span>", viewer)
 
     def test_rename_api(self):
         exhibit = self.show()

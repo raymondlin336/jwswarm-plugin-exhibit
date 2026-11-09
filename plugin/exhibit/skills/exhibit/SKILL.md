@@ -28,11 +28,25 @@ HTML is your most precise visual medium and the easiest to revise. An exhibit fi
 
 Skip it for short answers, and when the user wants a file in their project or in a specific format (for example a .docx or a .png).
 
-### 2. The user may be asked automatically
+### 2. Get a preset first: the user picks the kind of exhibit
 
-Don't ask the user yourself whether they want an exhibit; just build it. When you `show` a new exhibit and the user didn't mention one, WorkSwarm asks them "Exhibit or answer in chat?" before it's shown. Edits to an existing exhibit are never asked about.
+Before you write a new exhibit, call `preset`, without a name:
 
-With every new `show`, pass `chat_alternative`: the concrete thing you'd give instead of an exhibit, in a few words and in the user's language. It appears under "Answer in chat", so make it specific to this request rather than generic, and name the file format when it's a file. Pick a format WorkSwarm's file preview shows well:
+`{"action": "preset", "chat_alternative": "A PDF report with the summary table"}`
+
+Don't ask the user yourself; WorkSwarm asks them what kind of exhibit it should be, and the result is the page to start from:
+
+- **Document** (`"preset": "document"`): reports, proposals, one-pagers, memos, letters and meeting notes, shown as US Letter pages like a word processor.
+- **Slides** (`"preset": "slides"`): a 16:9 slide deck.
+- **No preset** (`"preset": "none"`): write the page yourself, as described below.
+
+Exhibit adds the page and slide controls, the page layout and PDF export to documents and slides itself. Don't add page numbers, print buttons, page sizes or slide navigation of your own.
+
+With a document or slides, the result's `html` is a complete sample page. Read the comment at its top: it lists the layouts and parts you can use. Keep its `<style>` and `<script>` as they are, replace every sample sentence and number with the user's content, and delete parts you don't need. These pages already follow the theme, saving and printing rules below.
+
+A new `show` is refused with `[CHOOSE_PRESET]` until the user has picked, once for each new exhibit. Edits to an existing exhibit never need a preset: keep the page's own structure.
+
+Unless the user asked for an exhibit, the question also offers "Answer in chat". So pass `chat_alternative` with `preset`: the concrete thing you'd give instead of an exhibit, in a few words and in the user's language. It appears under "Answer in chat", so make it specific to this request rather than generic, and name the file format when it's a file. Pick a format WorkSwarm's file preview shows well:
 
 - **Charts and diagrams:** SVG (sharp at any size, text stays exact) or PNG.
 - **Documents and reports:** PDF or Word (.docx).
@@ -41,10 +55,10 @@ With every new `show`, pass `chat_alternative`: the concrete thing you'd give in
 
 For example "A bar chart of the scores as an SVG image", "A PDF report with the summary table", "A Markdown table of the 20 tests with totals" or "An Excel sheet with one row per test". Plain text is rarely the right alternative for a visual or interactive request.
 
-- If they pick Exhibit, the call goes through as normal.
-- If the result starts with `[USER_CHOSE_CHAT]`, nothing was shown: give them the alternative you offered, in chat, and don't call `exhibit` again for that request.
-- If the result starts with `[USER_CANCELLED]`, they dismissed the question: nothing was shown, so reply briefly in chat and don't call `exhibit` again for that request.
-- If the result starts with `[USER_REPLIED]`, they answered in their own words: follow what they said.
+- If they pick a kind of exhibit, the result has `"preset"` and you go on to write it.
+- If the result starts with `[USER_CHOSE_CHAT]`, give them the alternative you offered, in chat, and don't call `exhibit` again for that request.
+- If the result starts with `[USER_CANCELLED]`, they dismissed the question: reply briefly in chat and don't call `exhibit` again for that request.
+- If the result starts with `[USER_REPLIED]`, they answered in their own words: follow what they said. If they still want an exhibit, call `preset` again with the `name` that fits (`document`, `slides` or `none`).
 
 ### 3. Write the exhibit
 
@@ -87,7 +101,7 @@ await exhibit.clear();
 
 ### 5. Show it
 
-`{"action": "show", "title": "Trip packing list", "summary": "Checklist for a 5-day trip that remembers what's packed", "html": "<!doctype html>...", "chat_alternative": "A packing checklist as a Markdown list"}`
+`{"action": "show", "title": "Trip packing list", "summary": "Checklist for a 5-day trip that remembers what's packed", "html": "<!doctype html>..."}`
 
 - `title`: short, and specific to this exhibit ("Benchmark scores by app", not just "Benchmark results"). Several exhibits about the same topic should still be easy to tell apart. If another exhibit already has the name, the tool adds a number, like "Benchmark scores by app (2)"; the `title` in the result is the final name, so use that when you mention the exhibit.
 - `summary`: one line saying what it shows. It appears under the title in the user's exhibits gallery.
@@ -97,6 +111,15 @@ await exhibit.clear();
 To change an exhibit, send the full new HTML with its `exhibit_id`. This adds a new version and keeps the saved data:
 
 `{"action": "show", "exhibit_id": "trip-packing-list-3fa2c1", "html": "..."}`
+
+**An exhibit's format never changes.** A document stays a document, a slide deck stays a slide deck, and a free-form exhibit stays free-form, in every new version. The page control, page layout and exports depend on it:
+
+- **Documents:** US Letter pages, with the content inside `<article class="sheet">`.
+- **Slides:** 16:9 slides in `<section class="slide">`.
+
+Change the content and the look freely, but keep those basics. If an edit drops them, or turns the exhibit into another format, `show` fails with `preset_locked` and nothing is saved.
+
+If the user asks for something the format can't do, don't work around it. That includes a different slide size, one long continuous page, no pages, or turning it into another kind of exhibit. Tell them this exhibit can't change format, and offer to make a **new** exhibit in the format they want (the user picks it, as for any new exhibit).
 
 ### 6. Read back what the user did
 
@@ -134,6 +157,8 @@ Users can point at an exhibit with a reference like `@exhibit(Benchmark scores b
 - `list`: all exhibits with their ids, for you to pick one (the result also has `gallery_url`). Use `gallery` instead when the user wants to look at them.
 - `open`: reopen an exhibit, optionally a `version`.
 - `delete`: call it directly when the user asks; don't ask them yourself. WorkSwarm shows them a "Delete …?" dialog. If the result starts with `[USER_KEPT]`, nothing was deleted. If it starts with `[USER_REPLIED]`, follow what they said.
+  - To delete several exhibits (for example "delete all my exhibits"), make **one** call with all of them: `{"action": "delete", "exhibit_ids": ["id-1", "id-2", "..."]}`. The user confirms them together in one dialog. Never make several delete calls at once.
+- Only one exhibit question can wait for the user at a time. If a result starts with `[ONE_AT_A_TIME]`, nothing happened for that call: wait for the other answer, then make the call again if it's still wanted.
 - `stop`: stop the local exhibit server (it restarts on the next `show` or `open`).
 
 ## Errors
@@ -147,5 +172,9 @@ If `success` is false, read `error_code`:
 - `too_large`: shrink the exhibit (under 2 MB) or the saved data (under 1 MB).
 - `[STOP_RETRYING]`: the same call has failed 3 times. Change the call as the message says, or stop and tell the user what went wrong. Never repeat an identical call.
 - `confirmation_required`: the confirmation dialog isn't available; ask the user in chat, then retry with `"confirm": true`.
+- `[CHOOSE_PRESET]`: you called `show` for a new exhibit before the user picked a preset. Call `preset` first (step 2), then write the exhibit from its result.
+- `invalid_preset`: `name` must be `document`, `slides` or `none`; usually leave it out.
+- `preset_locked`: the new version would change the exhibit's format. Keep its format; if the user wants another one, offer a new exhibit (see "An exhibit's format never changes").
+- `preset_structure`: the page claims to be a document or slides but is missing its structure (`.sheet` or `.slide` sections). Start again from the preset's page.
 - `[LOAD_SKILL]`: load this skill with `skill_tool` (`skill_name` "exhibit"), then call `show` again.
 - `[USE_EXHIBIT]`: you tried to send an HTML page with scripts as a file. Show it with `exhibit` instead. Only send the file again if the user asked for the file itself.

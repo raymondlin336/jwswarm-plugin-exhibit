@@ -1,0 +1,402 @@
+<!doctype html>
+<!--
+PRESET document v2. A printable document: report, proposal, analysis, review, one-pager or brief,
+memo or letter, meeting notes, how-to.
+
+Exhibit shows this document as US Letter pages, like a word processor, and the PDF has the same
+pages. It lays the pages out itself and adds page numbers and the page control, so don't add
+your own page sizes, @page rules, page numbers or print buttons. Keep everything inside
+<article class="sheet">.
+
+How to use it:
+- Keep the <style> block and the <script> at the end as they are. To restyle, change only the
+  variables on :root (and their dark and print copies).
+- Pick a layout by putting its class on <html>: report (the sample below), brief, memo or notes.
+  Set <html lang> to the user's language, and set <title>.
+- Replace the sample content with yours. Replace every sample sentence and number, and delete parts
+  you don't need rather than leaving them empty.
+- Lead with the answer: the .lede, summary callout or .bottom-line says the conclusion in a sentence.
+
+Layouts:
+- report: .cover (.eyebrow, h1, .lede, ul.meta), a Summary callout of 3 to 5 findings, nav.toc
+  (built from the h2s; hidden below 3 sections), main with one section per h2 (numbered for you),
+  h3 inside, figures and tables, Sources last. A proposal is a report with these sections:
+  Problem, Proposal, Cost, Risks, Decision needed.
+- brief: must fit one printed page; if it doesn't, use report instead of shrinking the type.
+    <header class="top"><div><p class="eyebrow">Weekly status brief</p><h1>Title</h1>
+      <ul class="meta"><li><b>For</b> Steering group</li><li><b>Date</b> 9 Nov 2026</li></ul></div>
+      <span class="pill at-risk">At risk</span></header>   (pill: on-track, at-risk, off-track)
+    <p class="bottom-line"><b>The answer in a few words</b>, then why, in one sentence.</p>
+    <section class="stats"><div class="stat"><div class="v">78%</div><div class="k">Label</div>
+      <div class="d up">+12 pts this week</div></div> ... 2 to 4 tiles </section>   (.d: up, down)
+    <div class="grid"><section class="panel"><h2>Progress</h2><ul><li>...</li></ul></section>
+      <section class="panel ask"><h2>Decision needed</h2>...</section> ... 2 to 4 panels </div>
+    <footer class="foot"><span>Contact</span><span>Source</span></footer>
+- memo: point first, then context, then numbered asks; one or two printed pages.
+    <p class="kind">Memo</p>
+    <dl class="memo-head"><dt>To</dt><dd>...</dd><dt>From</dt><dd>...</dd><dt>Cc</dt><dd>...</dd>
+      <dt>Date</dt><dd>...</dd><dt>Subject</dt><dd class="subject">...</dd></dl><hr class="rule">
+    <div class="body"><p>...</p><ol><li>...</li></ol></div>
+    <div class="signoff"><p class="name">Name</p><p class="role">Role</p></div>
+    <p class="attach">Attached: ...</p>
+  A letter uses the memo layout with this head instead of .kind, .memo-head and hr.rule:
+    <div class="letter-head"><div class="from">Sender<br>Address</div><div>Date</div>
+      <div class="to">Recipient<br>Address</div><p><b>Re: subject</b></p><p>Dear ...,</p></div>
+- notes: meeting notes, minutes, a call or workshop recap.
+    <header class="head"><p class="eyebrow">Weekly sync</p><h1>Meeting name</h1>
+      <ul class="meta"><li><b>When</b> ...</li><li><b>Where</b> ...</li></ul>
+      <ul class="people"><li class="person">Name</li><li class="person absent">Name</li></ul></header>
+    then a Summary callout, h2 Discussion, and one topic per agenda item:
+    <section class="topic"><h3>1. Topic</h3><ul><li>...</li></ul>
+      <p class="decision">What was decided.</p></section>
+    <h2>Actions</h2><p class="progress" id="progress"></p>
+    <div class="table-wrap"><table class="actions"><thead><tr><th></th><th>Action</th><th>Owner</th>
+      <th>Due</th></tr></thead><tbody>
+      <tr data-id="a1"><td><input type="checkbox" aria-label="Done"></td><td>...</td><td>Owner</td>
+      <td class="due">10 Nov</td></tr></tbody></table></div>
+    Ticks are saved with the exhibit. Give each action a unique data-id (a1, a2, ...) and keep it the
+    same in later versions so ticks carry over. End with <p class="next"><b>Next meeting:</b> ...</p>
+    if there is one.
+
+Parts for any layout:
+- aside.callout with span.label (add class ok or warn for a different color).
+- figure class="fig": a chart as inline SVG, colored with the CSS variables (see the sample);
+  figure class="tab": figcaption first, then div.table-wrap with the table. Captions number themselves.
+- Tables: td class="n" right-aligns numbers; put totals in tfoot.
+- class="page-break" starts a new page; class="no-print" hides something on the pages.
+-->
+<html lang="en" class="report">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="exhibit-preset" content="document@2">
+<title>Support response times, Q3 2026</title>
+<style>
+/* ---- doc base v2. Keep this stylesheet as it is; to restyle, change only the variables on :root. ---- */
+:root {
+  --bg:#f1f0ec; --paper:#ffffff; --fg:#1d1d1b; --muted:#6b6b66; --line:#e2e2dc; --card:#f7f7f4;
+  --accent:#2b59c3; --accent-soft:#eaf0fc; --ok:#1f7a4d; --warn:#9a5b00; --bad:#b42318;
+  --serif: Charter, "Bitstream Charter", "Sitka Text", Cambria, Georgia, "Noto Serif SC", "Songti SC", SimSun, serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+  --body: var(--serif);
+  --measure: 48rem;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:#121211; --paper:#1c1c1a; --fg:#ecece8; --muted:#a3a39c; --line:#363633; --card:#252523;
+    --accent:#8ab0ff; --accent-soft:#1e2a45; --ok:#5fcf95; --warn:#f0b04a; --bad:#ff8a7a;
+  }
+}
+/* Paper is always light, whatever the screen theme. */
+@media print {
+  :root {
+    --bg:#ffffff; --paper:#ffffff; --fg:#111110; --muted:#5a5a55; --line:#cfcfc8; --card:#f5f5f2;
+    --accent:#1f4aa8; --accent-soft:#eef2fb; --ok:#1f7a4d; --warn:#8a5000; --bad:#a51d12;
+    color-scheme: light;
+  }
+}
+html:lang(zh), html:lang(ja), html:lang(ko) { --body: var(--sans); }
+*, *::before, *::after { box-sizing: border-box; }
+html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 1rem/1.62 var(--body); }
+:lang(zh) body, :lang(ja) body { line-height: 1.8; }
+
+.sheet {
+  max-width: var(--measure); margin: 40px auto; padding: 64px 72px 72px;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .04), 0 12px 32px rgb(0 0 0 / .06);
+}
+h1, h2, h3, h4 { font-family: var(--sans); line-height: 1.25; text-wrap: balance; break-after: avoid; }
+h1 { font-size: 2.1rem; letter-spacing: -.015em; margin: 0 0 .35em; }
+h2 { font-size: 1.3rem; margin: 2.2em 0 .6em; }
+h3 { font-size: 1.05rem; margin: 1.6em 0 .4em; }
+p, ul, ol { margin: 0 0 1em; }
+p { text-wrap: pretty; }
+li { margin: .25em 0; }
+a { color: var(--accent); }
+strong { font-weight: 650; }
+hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+small, .muted { color: var(--muted); }
+.eyebrow { font: 600 .75rem/1.2 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 .9rem; }
+.lede { font-size: 1.15rem; color: var(--muted); margin: 0 0 1.5rem; }
+.meta { display: flex; flex-wrap: wrap; gap: .4rem 1.6rem; font: .85rem/1.4 var(--sans); color: var(--muted); margin: 0; padding: 0; list-style: none; }
+.meta b { color: var(--fg); font-weight: 600; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* Callouts: border-based so they survive printing without background graphics. */
+.callout { border: 1px solid var(--line); border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: 4px; padding: .9rem 1.1rem; margin: 1.4rem 0; break-inside: avoid; }
+.callout > :last-child { margin-bottom: 0; }
+.callout .label { display: block; font: 700 .75rem/1.2 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--accent); margin-bottom: .4rem; }
+.callout.ok { border-left-color: var(--ok); background: var(--card); } .callout.ok .label { color: var(--ok); }
+.callout.warn { border-left-color: var(--warn); background: var(--card); } .callout.warn .label { color: var(--warn); }
+
+/* Tables */
+.table-wrap { overflow-x: auto; margin: 1.2rem 0 1.6rem; }
+table { width: 100%; border-collapse: collapse; font: .9rem/1.45 var(--sans); }
+th, td { text-align: left; padding: .5rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+thead th { font-weight: 600; color: var(--muted); border-bottom: 2px solid var(--fg); white-space: nowrap; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+tfoot td { font-weight: 650; border-top: 2px solid var(--fg); border-bottom: 0; }
+tr { break-inside: avoid; }
+
+/* Figures, numbered automatically */
+body { counter-reset: fig tab; }
+figure { margin: 1.6rem 0; break-inside: avoid; }
+figure svg { display: block; width: 100%; height: auto; }
+figcaption { font: .82rem/1.45 var(--sans); color: var(--muted); margin-top: .6rem; }
+figure.fig figcaption::before { counter-increment: fig; content: "Figure " counter(fig) ". "; font-weight: 600; color: var(--fg); }
+figure.tab figcaption::before { counter-increment: tab; content: "Table " counter(tab) ". "; font-weight: 600; color: var(--fg); }
+figure.tab figcaption { margin: 0 0 .5rem; }
+
+@media screen and (max-width: 760px) {
+  .sheet { margin: 0; padding: 56px 20px 40px; border: 0; border-radius: 0; box-shadow: none; }
+  h1 { font-size: 1.7rem; }
+}
+@page { margin: 18mm 17mm 20mm; @bottom-right { content: counter(page) " / " counter(pages); font: 8pt sans-serif; color: #888; } }
+@media print {
+  html { font-size: 10.5pt; }
+  body { background: none; }
+  .sheet { max-width: none; margin: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+  .no-print { display: none !important; }
+  a { color: inherit; text-decoration: none; }
+  p, li { orphans: 3; widows: 3; }
+  .page-break { break-before: page; }
+}
+/* ---- end doc base ---- */
+/* ---- layouts: html.report (default), html.brief, html.memo, html.notes ---- */
+html.brief { font-size: 15px; --body: var(--sans); --measure: 52rem; }
+html.memo { --measure: 44rem; }
+html.notes { font-size: 15.5px; --body: var(--sans); --measure: 46rem; }
+@media print { html.brief { font-size: 9.6pt; } html.notes { font-size: 10pt; } }
+
+/* report */
+.cover { padding-bottom: 1.6rem; border-bottom: 1px solid var(--line); margin-bottom: 2rem; }
+.toc { font: .9rem/1.5 var(--sans); margin: 2rem 0; }
+.toc h2 { font-size: .75rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 .6rem; }
+.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
+.toc li { counter-increment: toc; display: flex; gap: .7rem; margin: .2rem 0; }
+.toc li::before { content: counter(toc); color: var(--muted); min-width: 1.2rem; font-variant-numeric: tabular-nums; }
+.toc a { color: var(--fg); text-decoration: none; }
+.toc a:hover { color: var(--accent); }
+main { counter-reset: sec; }
+main > section > h2::before { counter-increment: sec; content: counter(sec); color: var(--accent); margin-right: .7rem; font-variant-numeric: tabular-nums; }
+.findings { margin: 0; padding-left: 1.2rem; }
+.sources { font-size: .85rem; color: var(--muted); }
+.sources li { margin: .35em 0; }
+.chart text { font: 12px var(--sans); fill: var(--muted); }
+.chart .bar { fill: var(--accent); }
+.chart .bar.prev { fill: var(--muted); opacity: .35; }
+.chart .axis { stroke: var(--line); }
+.chart .val { fill: var(--fg); font-weight: 600; }
+
+/* brief */
+html.brief .sheet { padding: 48px 56px 44px; }
+.top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1.5rem; border-bottom: 2px solid var(--fg); padding-bottom: 1rem; margin-bottom: 1.4rem; }
+.top h1 { font-size: 1.75rem; margin: 0 0 .5rem; }
+.pill { display: inline-flex; align-items: center; gap: .4rem; font: 600 .8rem/1 var(--sans); padding: .4rem .7rem; border-radius: 999px; border: 1.5px solid currentColor; white-space: nowrap; }
+.pill::before { content: ""; width: .55rem; height: .55rem; border-radius: 50%; background: currentColor; }
+.pill.on-track { color: var(--ok); } .pill.at-risk { color: var(--warn); } .pill.off-track { color: var(--bad); }
+.bottom-line { font-size: 1.12rem; line-height: 1.5; margin: 0 0 1.4rem; }
+.bottom-line b { color: var(--accent); font-weight: 650; }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .8rem; margin: 0 0 1.4rem; }
+.stat { border: 1px solid var(--line); border-radius: 6px; padding: .8rem 1rem; break-inside: avoid; }
+.stat .v { font: 650 1.7rem/1.1 var(--sans); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.stat .k { font-size: .82rem; margin-top: .25rem; }
+.stat .d { font-size: .78rem; color: var(--muted); margin-top: .15rem; }
+.stat .d.up { color: var(--ok); } .stat .d.down { color: var(--bad); }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.1rem 1.6rem; }
+.panel { break-inside: avoid; }
+.panel h2 { font-size: .78rem; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); margin: 0 0 .5rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line); }
+.panel ul { padding-left: 1.1rem; margin: 0; }
+.panel li { margin: .3rem 0; }
+.panel.ask h2 { color: var(--accent); border-bottom-color: var(--accent); }
+.foot { margin-top: 1.6rem; padding-top: .7rem; border-top: 1px solid var(--line); font-size: .78rem; color: var(--muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+
+/* memo and letter */
+.kind { font: 700 1.9rem/1 var(--sans); letter-spacing: .14em; text-transform: uppercase; margin: 0 0 1.4rem; }
+.memo-head { display: grid; grid-template-columns: max-content 1fr; gap: .45rem 1.4rem; font: .95rem/1.4 var(--sans); margin: 0 0 1.2rem; }
+.memo-head dt { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: .75rem; letter-spacing: .06em; padding-top: .15rem; }
+.memo-head dd { margin: 0; }
+.memo-head dd.subject { font-weight: 650; }
+.rule { border: 0; border-top: 2px solid var(--fg); margin: 0 0 1.8rem; }
+.letter-head { font: .95rem/1.5 var(--sans); margin-bottom: 2rem; }
+.letter-head .from { text-align: right; margin-bottom: 1.6rem; color: var(--muted); }
+.letter-head .to { margin: 1.2rem 0 1.6rem; }
+.signoff { margin-top: 2.2rem; }
+.signoff p { margin: 0; }
+.signoff .name { font-weight: 650; }
+.signoff .role { color: var(--muted); }
+.attach { margin-top: 2rem; font: .85rem/1.5 var(--sans); color: var(--muted); }
+
+/* meeting notes */
+.head { border-bottom: 1px solid var(--line); padding-bottom: 1.2rem; margin-bottom: 1.4rem; }
+.head h1 { font-size: 1.8rem; }
+html.notes h2 { font-size: 1.05rem; margin: 2rem 0 .7rem; }
+.next { font-size: .9rem; color: var(--muted); }
+.people { display: flex; flex-wrap: wrap; gap: .4rem; margin: 1rem 0 0; padding: 0; list-style: none; }
+.person { font-size: .82rem; border: 1px solid var(--line); border-radius: 999px; padding: .2rem .65rem; }
+.person.absent { color: var(--muted); border-style: dashed; }
+.person.absent::after { content: " (apologies)"; }
+.topic { border-left: 2px solid var(--line); padding: .1rem 0 .1rem 1.1rem; margin: 0 0 1.3rem; break-inside: avoid; }
+.topic h3 { margin: 0 0 .4rem; font-size: 1rem; }
+.topic ul { padding-left: 1.1rem; margin: 0 0 .5rem; }
+.decision { margin: .5rem 0 0; font-weight: 600; }
+.decision::before { content: "Decision"; display: inline-block; font: 700 .68rem/1 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--ok); border: 1.5px solid var(--ok); border-radius: 3px; padding: .22rem .38rem; margin-right: .55rem; vertical-align: .12em; }
+:lang(zh) .decision::before { content: "决定"; }
+:lang(zh) .person.absent::after { content: "（请假）"; }
+.actions td:first-child, .actions th:first-child { width: 2rem; padding-right: 0; }
+.actions input { width: 1.05rem; height: 1.05rem; accent-color: var(--accent); margin: .15rem 0 0; cursor: pointer; }
+.actions tr.done td:nth-child(2) { text-decoration: line-through; color: var(--muted); }
+.actions .due { white-space: nowrap; }
+.progress { font: .82rem var(--sans); color: var(--muted); margin: -.3rem 0 0; }
+
+@media screen and (max-width: 760px) { .top { flex-direction: column; } .grid { grid-template-columns: 1fr; } }
+@media print { .progress { display: none; } .toc { break-after: avoid; } }
+/* ---- end layouts ---- */
+</style>
+</head>
+<body>
+<article class="sheet">
+
+<header class="cover">
+  <p class="eyebrow">Quarterly report</p>
+  <h1>Support response times, Q3 2026</h1>
+  <p class="lede">First responses got 38% faster after the triage change, but weekend tickets still wait more than twice as long.</p>
+  <ul class="meta">
+    <li><b>Prepared by</b> Customer Operations</li>
+    <li><b>Date</b> 9 November 2026</li>
+    <li><b>Status</b> Final</li>
+  </ul>
+</header>
+
+<aside class="callout">
+  <span class="label">Summary</span>
+  <ul class="findings">
+    <li>Median first response fell from 4.2 to 2.6 hours after triage moved to the shared queue in July.</li>
+    <li>Weekend tickets wait a median 6.1 hours, against 2.6 on weekdays.</li>
+    <li>Satisfaction rose to 91%, the highest this year, with no change in headcount.</li>
+    <li>We recommend one rotating weekend shift, starting in December.</li>
+  </ul>
+</aside>
+
+<nav class="toc" id="toc" aria-label="Contents"><h2>Contents</h2><ol></ol></nav>
+
+<main>
+<section id="background">
+  <h2>Background</h2>
+  <p>Until June, each product team triaged its own tickets. Tickets that touched more than one product were often passed between queues before anyone answered, which drove most of the long waits we reported in Q2.</p>
+  <p>In July we moved triage to one shared queue, staffed in two-hour blocks by the existing team. This report compares July to September with the same months last year.</p>
+</section>
+
+<section id="results">
+  <h2>Results</h2>
+  <h3>Response times</h3>
+  <p>Every month of the quarter beat the same month last year, and the gap widened as the team got used to the new queue.</p>
+  <figure class="fig">
+    <svg class="chart" viewBox="0 0 640 230" role="img" aria-label="Median first response in hours, by month, 2025 and 2026">
+      <line class="axis" x1="40" y1="190" x2="630" y2="190"/>
+      <rect class="bar prev" x="80" y="58" width="60" height="132"/><text class="val" x="110" y="50" text-anchor="middle">4.4</text>
+      <rect class="bar" x="146" y="100" width="60" height="90"/><text class="val" x="176" y="92" text-anchor="middle">3.0</text>
+      <text x="143" y="212" text-anchor="middle">July</text>
+      <rect class="bar prev" x="270" y="64" width="60" height="126"/><text class="val" x="300" y="56" text-anchor="middle">4.2</text>
+      <rect class="bar" x="336" y="112" width="60" height="78"/><text class="val" x="366" y="104" text-anchor="middle">2.6</text>
+      <text x="333" y="212" text-anchor="middle">August</text>
+      <rect class="bar prev" x="460" y="70" width="60" height="120"/><text class="val" x="490" y="62" text-anchor="middle">4.0</text>
+      <rect class="bar" x="526" y="124" width="60" height="66"/><text class="val" x="556" y="116" text-anchor="middle">2.2</text>
+      <text x="523" y="212" text-anchor="middle">September</text>
+      <rect class="bar prev" x="40" y="8" width="12" height="12"/><text x="58" y="18">2025</text>
+      <rect class="bar" x="110" y="8" width="12" height="12"/><text x="128" y="18">2026</text>
+    </svg>
+    <figcaption>Median hours to first response, by month. Grey is 2025, blue is 2026.</figcaption>
+  </figure>
+
+  <h3>By channel and day</h3>
+  <figure class="tab">
+    <figcaption>Median hours to first response, Q3 2026.</figcaption>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Channel</th><th class="n">Tickets</th><th class="n">Weekday</th><th class="n">Weekend</th><th class="n">Satisfaction</th></tr></thead>
+      <tbody>
+        <tr><td>Email</td><td class="n">8,412</td><td class="n">2.9</td><td class="n">6.8</td><td class="n">89%</td></tr>
+        <tr><td>In-app chat</td><td class="n">5,106</td><td class="n">1.8</td><td class="n">4.9</td><td class="n">94%</td></tr>
+        <tr><td>Phone callback</td><td class="n">1,233</td><td class="n">3.4</td><td class="n">7.2</td><td class="n">90%</td></tr>
+      </tbody>
+      <tfoot><tr><td>All channels</td><td class="n">14,751</td><td class="n">2.6</td><td class="n">6.1</td><td class="n">91%</td></tr></tfoot>
+    </table></div>
+  </figure>
+</section>
+
+<section id="weekends">
+  <h2>The weekend gap</h2>
+  <p>Weekend tickets are only 14% of volume but account for 41% of tickets that waited more than a day. Nobody is scheduled on Saturdays; Sunday cover is voluntary and uneven.</p>
+  <aside class="callout warn">
+    <span class="label">Risk</span>
+    <p>The December sale lands on a weekend. On last year's numbers, about 900 tickets would arrive with no one on shift.</p>
+  </aside>
+</section>
+
+<section id="recommendation">
+  <h2>Recommendation</h2>
+  <p>Add one rotating weekend shift, four hours each day, starting 5 December. With twelve people on the rota, each person works one weekend shift every six weeks, paid as overtime.</p>
+  <ol>
+    <li>Publish the rota by 20 November.</li>
+    <li>Route weekend tickets to the shared queue with a four-hour target.</li>
+    <li>Review the numbers at the end of January.</li>
+  </ol>
+</section>
+</main>
+
+<hr>
+<section>
+  <h3>Sources</h3>
+  <ol class="sources">
+    <li>Helpdesk export, 1 July to 30 September 2025 and 2026, all closed tickets.</li>
+    <li>Post-ticket survey, 3,904 responses (26% response rate).</li>
+  </ol>
+</section>
+</article>
+<script>
+// Contents list from the numbered sections; removed for short documents.
+(() => {
+  const toc = document.getElementById("toc");
+  if (!toc) return;
+  const heads = [...document.querySelectorAll("main > section > h2")];
+  if (heads.length < 3) { toc.remove(); return; }
+  const list = toc.querySelector("ol");
+  heads.forEach((h, i) => {
+    const sec = h.parentElement;
+    if (!sec.id) sec.id = "s" + (i + 1);
+    const li = document.createElement("li"), a = document.createElement("a");
+    a.href = "#" + sec.id; a.textContent = h.textContent;
+    li.append(a); list.append(li);
+  });
+})();
+// Action items: ticks are saved with the exhibit, so they survive reloads and new versions.
+(async () => {
+  const rows = [...document.querySelectorAll(".actions tbody tr[data-id]")];
+  if (!rows.length) return;
+  const progress = document.getElementById("progress");
+  const bridge = window.exhibit;  // missing when the page is opened outside Exhibit
+  let done = [];
+  try { done = (bridge && (await bridge.get("done"))) || []; } catch { done = []; }
+  const render = () => {
+    rows.forEach((r) => {
+      const on = done.includes(r.dataset.id);
+      r.querySelector("input").checked = on;
+      r.classList.toggle("done", on);
+    });
+    const n = rows.filter((r) => done.includes(r.dataset.id)).length;
+    if (progress) progress.textContent = `${n} / ${rows.length}`;
+  };
+  rows.forEach((r) => r.querySelector("input").addEventListener("change", async (e) => {
+    const id = r.dataset.id;
+    done = e.target.checked ? [...new Set([...done, id])] : done.filter((x) => x !== id);
+    render();
+    try { if (bridge) await bridge.set("done", done); } catch { /* still usable without saving */ }
+  }));
+  render();
+})();
+</script>
+</body>
+</html>

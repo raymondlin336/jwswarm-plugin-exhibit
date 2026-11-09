@@ -75,8 +75,8 @@
         "zh": "展品形式确认"
       },
       "display_description": {
-        "en": "Before a new exhibit is shown, asks whether you want an exhibit or an answer in chat, unless you asked for an exhibit.",
-        "zh": "在展示新展品前，询问你想要展品还是在对话中回答；如果你已明确要求展品则不再询问。"
+        "en": "Before a new exhibit is made, asks what kind you want: a document, slides or a free-form page (or an answer in chat, unless you asked for an exhibit).",
+        "zh": "在制作新展品前，询问你想要哪种形式：文档、幻灯片或自由页面（如果你没有明确要求展品，也可以选择在对话中回答）。"
       }
     }
   ]
