@@ -2,11 +2,16 @@
 
 Last updated 2026-11-05.
 
-## Now: release 0.2.1
+## Released
 
-- [x] Test 0.2.1 in WorkSwarm (delete dialog, skill check, HTML-as-file redirect, cached thumbnails)
-- [ ] Commit, removing the stray framework logs from git: `git rm -r --cached logs`
-- [ ] Tag `v0.2.1` and push the tag
+- [x] 0.2.1 tested in WorkSwarm, committed, tagged `v0.2.1` and pushed
+- [ ] Untrack the stray framework logs: `git rm -r --cached logs` (already in .gitignore)
+
+## Evidence so far
+
+- Same prompt ("5 slide presentation on this repo"), same model (deepseek-v4-flash), repo reading excluded:
+  exhibit deck 66 s / 3 tool calls vs PowerPoint (`ppt-creation`) 6 min 47 s / 54 tool calls.
+  Most PowerPoint time went to specs, QA scripts and 7 build-check-fix rounds, not slide content.
 
 ## Pinned
 
@@ -14,7 +19,7 @@ Last updated 2026-11-05.
 - [ ] A diverse set of exhibit presets, each a ready-made renderer the agent fills with content instead of writing the whole page:
   chart / dashboard, document / report, slides, table / data, calculator / tool, tracker / checklist, mockup / prototype, diagram; free-form HTML stays as the fallback
 - [ ] Routing: pick the preset from the request's intent, then load only that preset's instructions
-- [ ] Start with one preset (Chart, on the benchmark data) and compare it with today's hand-written exhibits
+- [ ] Start with one preset (Chart on the benchmark data, or Slides, HTML-first with PowerPoint as an export) and compare it with today's hand-written exhibits
 
 ### Export to traditional file formats
 - [ ] Download from the ⋯ menu and the exhibit bar
@@ -44,7 +49,7 @@ Last updated 2026-11-05.
 
 - [ ] Retake `docs/demo.png`
 - [ ] GitHub releases with the zips attached
-- [ ] Check the agent reliably fills in `summary` and `chat_alternative`
+- [ ] Check the agent reliably fills in `summary` and `chat_alternative` (it did in the last deck run)
 - [ ] The agent writes the full HTML before the user is asked "Exhibit or answer in chat?"
 
 ## Set aside for now

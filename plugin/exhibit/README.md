@@ -1,6 +1,6 @@
 # Exhibit (exhibit)
 
-**Version 0.2.1 (prototype)**
+**Version 0.2.2 (prototype)**
 
 Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calculators, checklists, forms, charts and small games, opened in a sandboxed browser tab. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back.
 
@@ -21,7 +21,7 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 
 ## How it works
 
-- Exhibits and saved data are stored in `~/.exhibit/exhibits/<exhibit_id>/` (`v1.html`, `v2.html`, …, `meta.json`, `data.json`).
+- Exhibits and saved data are stored in `~/.exhibit/exhibits/<exhibit_id>/` (`v1.html`, `v2.html`, …, `meta.json`, `data.json`). `meta.json` also records the WorkSwarm chat session each version was made in.
 - On first use, the tool starts a small web server on `127.0.0.1`, reachable only from this computer, with a secret token in every address. It stops when WorkSwarm closes and restarts when needed.
 - Each exhibit runs inside a sandboxed frame. It saves data through `window.exhibit` (`get`, `set`, `remove`, `all`, `clear`), up to 1 MB per exhibit, shared by all its versions.
 
@@ -36,33 +36,43 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 
 ## Updates
 
+### 0.2.2
+
+- **Refer to an exhibit in chat** with `@exhibit(Name #code)` (optionally `, version 2`). The agent is told exactly which exhibit you mean, with its versions, summary and saved data, even if it was renamed since. A code that matches nothing is reported instead of guessed.
+- The agent can pass that code or reference wherever it needs an exhibit, and every result includes the exhibit's reference so it can give it to you.
+- **Copy reference** on an exhibit's page (the link icon in the bar) and in the gallery's ⋯ menu, ready to paste into a chat.
+- **Delete** is now its own icon in an exhibit's bar. The exhibit's ⋯ menu is empty for now: actions in the bar aren't repeated there.
+- **Quote**: select text in an exhibit and a Quote button appears. It copies the reference plus the selected text as `>` lines (table cells joined with ` | `, cut at 1,000 characters), and the agent treats the quoted part as what you're asking about.
+- **Export** menu in an exhibit's bar, with one format for now: **HTML file**. It downloads the version you're viewing as a single file that opens on its own, with the saved data built in. Changes made in the downloaded file aren't saved back.
+- The agent assumes you mean an exhibit's latest version unless you name another.
+- Every new exhibit gets a code no other exhibit uses.
+- **Exhibits remember the chat they were made in.** Each exhibit, and each version, records its WorkSwarm chat session. The agent sees the session id, and the path of that chat's saved history, when it reads an exhibit or you refer to one, so it can look back at the conversation behind it. Exhibits made before 0.2.2 have no session recorded.
+
 ### 0.2.1
 
-- **Delete asks in a dialog:** when the agent deletes an exhibit, WorkSwarm shows "Delete '<name>'?" with Delete and Keep it, instead of the agent asking in chat. Nothing is deleted unless you pick Delete.
-- **No more blank charts in the file preview:** if the agent tries to send an HTML page with scripts as a file, it's told to show it as an exhibit instead (the preview panel blocks scripts). If you asked for the file itself, it can still send it.
-- **The agent always reads the exhibit instructions** before showing one, so exhibits follow the rules for theme, libraries and saving data.
-- The agent refers to exhibits by name instead of showing their ids.
-- **No more retry loops:** the agent can hand over a long page as a saved file (`html_file`), errors say how to fix the call, and the same failing call is stopped after 3 tries with a note to fix it or explain.
-- Saying "exhibit" once in a chat counts for the whole chat, so follow-ups aren't asked "Exhibit or answer in chat?" again.
-- **Previews only refresh when an exhibit is edited:** each version is cached by your browser, thumbnails draw without animations, and renaming or deleting on All exhibits updates the page in place instead of reloading it.
+- **User interaction improvements:**
+  - When the agent deletes an exhibit, WorkSwarm shows the option select box, and the user has to click confirm, instead of responding via chatting
+  - Saying "exhibit" once in a chat counts for the whole chat, so follow-ups aren't asked "Exhibit or answer in chat?" again
+- Thumbnails in All Exhibits only refresh when an exhibit is edited, instead of refreshing each time the page is opened. Unnessesary animations removed
+- **Bug Fixes / Improvements:**
+  - Fixed issue where sometimes agent repeatedly injects HTML directly into chat
+  - Added rail to ensure SKILLS.md is always read the the time the tools are made available to the agent
+  - Fixes issue where sometimes agent retries the same html despite errors due to details on how to fix it not properly read
 
 ### 0.2.0
 
-- **New Exhibits pages,** styled after WorkSwarm:
-  - a rail with WorkSwarm's logo and an Exhibits button, so integration with WorkSwarm UI down the road would be easier.
-  - a collapsible Exhibits column with buttons for All Exhibits, creating a new exhibit (not hooked up), and searching for an exhibit.
-- **The All exhibits page** lists exhibits newest-created first: a row of large cards with live previews, then the rest as list rows with a small preview, name, and when each was updated and created.
-- **More actions (⋯):** rename or delete exhibits from All exhibits.
-- **A simpler bar above each exhibit:** added UI for renaming, deleting, and past versions.
-- **New `gallery` action,** so the agent can open the Exhibits page when you ask to see your exhibits; `list` also returns its link.
-- **New `summary` field:** one line describing each exhibit, used for search.
-- **Exhibits follow your system's light or dark theme** at the time of creation.
-
-- **Fix:** after an update, a server left running by the old version is no longer reused, so new pages show up without restarting WorkSwarm.
+- **All Exhibits UI** created:
+  - Modeled after existing WorkSwarm UI for easier future integration, possibly as another on the left hand side vertical menu
+  - Added a collapsible  column with buttons for All Exhibits, creating a new exhibit (not hooked up), and searching for an exhibit (title + description)
+  - Main UI panel sorts exhibits by when they were created, first row with large thumbnails, others with smaller ones. Name, created time, last updated time
+  - Added more options button, added rename or delete exhibits
+- **Individual Exhibit UI** improved:
+  - Added renaming, versions, and deletion options
+- New `gallery` action, the agent can now open the All Exhibits page when requested
+- Exhibits now follow your system's light or dark theme at the time of creation.
 
 ### 0.1.0
 
-- First working release, tested end to end in WorkSwarm 0.2.7.
-- **exhibit tool:** interactive, sandboxed exhibits with versions and saved data, opened in your browser. It's always visible to the agent, which tells it to use this tool instead of the preview panel for interactive HTML.
-- **ExhibitAskRail:** asks "Exhibit or answer in chat?" before a new exhibit you didn't ask for, with the agent's description of the chat alternative.
-- **exhibit skill:** when an exhibit helps, how to write one that works in the sandbox, and how to report results honestly.
+- First working version, tested end to end in WorkSwarm 0.2.7.
+- **Basic framework:** interactive, sandboxed exhibits with versions and saved data, opened in your browser.
+- **User confirmation:** asks "Exhibit or answer in chat?" when what the user want is ambiguous or not mentioned.

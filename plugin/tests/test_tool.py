@@ -1,7 +1,9 @@
-"""Tests for the exhibit tool. Run with: python -m unittest discover plugin/tests"""
+"""Tests for the exhibit tool.
+
+Run with plugin\\run_tests.ps1: they need Python 3.11 with the real openjiuwen framework, like WorkSwarm.
+"""
 
 import asyncio
-import enum
 import importlib.util
 import json
 import os
@@ -16,33 +18,7 @@ from pathlib import Path
 TOOL_FILE = Path(__file__).parents[1] / "exhibit" / "tools" / "exhibit_tool.py"
 
 
-def _install_openjiuwen_stand_in() -> None:
-    class ToolCard:
-        def __init__(self, **fields):
-            self.__dict__.update(fields)
-
-    class Tool:
-        def __init__(self, card):
-            self.card = card
-
-    class ToolExposure(str, enum.Enum):
-        DIRECT = "direct"
-        DEFERRED = "deferred"
-
-    module = types.ModuleType("openjiuwen.core.foundation.tool")
-    module.Tool = Tool
-    module.ToolCard = ToolCard
-    module.ToolExposure = ToolExposure
-    for name in ("openjiuwen", "openjiuwen.core", "openjiuwen.core.foundation"):
-        sys.modules.setdefault(name, types.ModuleType(name))
-    sys.modules["openjiuwen.core.foundation.tool"] = module
-
-
 def _load_module():
-    try:
-        importlib.import_module("openjiuwen.core.foundation.tool")
-    except Exception:  # noqa: BLE001 - no real openjiuwen here (or another test's stand-in)
-        _install_openjiuwen_stand_in()
     spec = importlib.util.spec_from_file_location("exhibit_tool", TOOL_FILE)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -216,6 +192,27 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertEqual(not_there["error_code"], "file_not_found")
         self.assertIn("write_file", not_there["error"])
 
+    def test_results_include_the_reference(self):
+        exhibit = self.show(title="Benchmark scores by app")
+        code = exhibit["exhibit_id"].rsplit("-", 1)[-1]
+        self.assertEqual(exhibit["reference"], f"@exhibit(Benchmark scores by app #{code})")
+        self.assertEqual(self.call(action="list")["exhibits"][0]["reference"], exhibit["reference"])
+        self.assertEqual(self.call(action="read", exhibit_id=exhibit["exhibit_id"])["reference"], exhibit["reference"])
+
+    def test_exhibit_id_accepts_codes_and_references(self):
+        exhibit = self.show(title="Benchmark scores by app")
+        full = exhibit["exhibit_id"]
+        code = full.rsplit("-", 1)[-1]
+        MOD._rename_exhibit(full, "Renamed since")
+        for given in (full, code, "#" + code, f"@exhibit(Benchmark scores by app #{code})",
+                      f"@exhibit(Old name #{code}, version 1)"):
+            result = self.call(action="read", exhibit_id=given)
+            self.assertTrue(result["success"], (given, result))
+            self.assertEqual((result["exhibit_id"], result["title"]), (full, "Renamed since"))
+        edited = self.show(exhibit_id="#" + code, title=None, html="<p>v2</p>")
+        self.assertEqual((edited["exhibit_id"], edited["version"]), (full, 2))
+        self.assertEqual(self.call(action="read", exhibit_id="#000000")["error_code"], "invalid_exhibit_id")
+
     def test_versions_are_cached_and_pages_are_not(self):
         exhibit = self.show()
         base = exhibit["url"].split("/e/")[0]
@@ -228,13 +225,101 @@ class ExhibitToolTests(unittest.TestCase):
         exhibit = self.show()
         base = exhibit["url"].split("/e/")[0]
         gallery = _http(base + "/")[2]
-        self.assertIn(f'src="/{base.split("/")[-1]}/raw/{exhibit["exhibit_id"]}/1?thumb=1"', gallery)
+        self.assertIn(f'src="/{base.split("/")[-1]}/raw/{exhibit["exhibit_id"]}/1?thumb=1&b={MOD._BUILD}"', gallery)
         calm = _http(f"{base}/raw/{exhibit['exhibit_id']}/1?thumb=1")[2]
         self.assertIn('Object.defineProperty(window, "Chart"', calm)
         self.assertIn("animation:none!important", calm)
         full = _http(f"{base}/raw/{exhibit['exhibit_id']}/1")[2]
         self.assertNotIn('Object.defineProperty(window, "Chart"', full)  # the exhibit itself keeps animations
         self.assertIn("window.exhibit", full)
+        self.assertIn('channel: "exhibit-quote"', full)  # selections can be quoted in the viewer
+        self.assertNotIn('channel: "exhibit-quote"', calm)  # but not in thumbnails
+
+    def test_viewer_offers_copy_reference_and_quote(self):
+        exhibit = self.show()
+        page = _http(exhibit["url"])[2]
+        self.assertIn('id="copy-ref"', page)
+        self.assertIn('id="quote-btn"', page)
+        self.assertIn(f'/raw/{exhibit["exhibit_id"]}/1?b={MOD._BUILD}"', page)  # a plugin update refetches pages
+        self.assertIn('id="delete-exhibit"', page)  # delete is its own button in the bar
+        self.assertNotIn('label: "Copy reference"', page)  # the bar's actions aren't repeated in the menu
+        self.assertNotIn('label: "Delete"', page)
+        self.assertIn('label: "Copy reference"', _http(exhibit["url"].split("/e/")[0] + "/")[2])
+
+    def test_export_html_is_a_standalone_file_with_saved_data(self):
+        exhibit = self.show(title='Budget: "Q1" / 2026', html="<html><head></head><body><p>v1</p></body></html>")
+        exhibit_id = exhibit["exhibit_id"]
+        self.show(exhibit_id=exhibit_id, title=None, html="<html><head></head><body><p>v2</p></body></html>")
+        MOD._apply_data_op(exhibit_id, {"op": "set", "key": "note", "value": "</script><b>x</b>"})
+        base = exhibit["url"].split("/e/")[0]
+        status, headers, page = _http(f"{base}/api/{exhibit_id}/export")
+        self.assertEqual(status, 200)
+        self.assertIn("attachment;", headers["Content-Disposition"])
+        self.assertIn("filename*=UTF-8''Budget%20Q1%202026.html", headers["Content-Disposition"])
+        self.assertIn("<p>v2</p>", page)  # the latest version by default
+        self.assertIn("window.exhibit", page)
+        self.assertIn("\u003c/script>", page)  # saved data can't close the script early
+        self.assertNotIn("</script><b>", page)
+        self.assertNotIn("parent.postMessage", page)  # no viewer to talk to in a downloaded file
+        self.assertIn("<p>v1</p>", _http(f"{base}/api/{exhibit_id}/export?v=1")[2])
+        refused = _http(f"{base}/api/{exhibit_id}/export", headers={"Sec-Fetch-Site": "cross-site"})
+        self.assertEqual(refused[0], 403)
+        viewer = _http(exhibit["url"])[2]
+        self.assertIn('id="export"', viewer)
+        self.assertIn('label: "HTML file (.html)"', viewer)
+
+    def test_new_codes_are_unique(self):
+        first = self.show(title="Alpha")["exhibit_id"]
+        taken = first.rsplit("-", 1)[-1]
+        codes = iter([taken, taken, "abcdef"])
+        real = MOD.secrets.token_hex
+        MOD.secrets.token_hex = lambda n: next(codes)
+        try:
+            second = self.show(title="Beta")["exhibit_id"]
+        finally:
+            MOD.secrets.token_hex = real
+        self.assertEqual(second, "beta-abcdef")
+
+    def test_records_the_chat_session_and_points_to_its_history(self):
+        def session(sid, parent=None):
+            return types.SimpleNamespace(get_session_id=lambda: sid, get_parent_session_id=lambda: parent)
+
+        jw = Path(self.tmp.name, "jw")
+        history = jw / "agent" / "sessions" / "web_a1" / "history.jsonl"
+        history.parent.mkdir(parents=True)
+        history.write_text("{}\n", encoding="utf-8")
+        os.environ["JIUWENSWARM_HOME"] = str(jw)
+        self.addCleanup(os.environ.pop, "JIUWENSWARM_HOME", None)
+
+        inputs = {"action": "show", "title": "Chart", "html": "<p>1</p>"}
+        exhibit_id = asyncio.run(self.tool.invoke(inputs, session=session("web_a1")))["exhibit_id"]
+        # A sub-agent's call is recorded under the chat that owns it.
+        edit = {"action": "show", "exhibit_id": exhibit_id, "html": "<p>2</p>"}
+        asyncio.run(self.tool.invoke(edit, session=session("child_9", parent="web_b2")))
+        self.show(exhibit_id=exhibit_id, html="<p>3</p>")  # no session: nothing recorded
+
+        meta = json.loads(Path(self.tmp.name, "exhibits", exhibit_id, "meta.json").read_text(encoding="utf-8"))
+        self.assertEqual(meta["session_id"], "web_a1")
+        self.assertEqual([v.get("session_id") for v in meta["versions"]], ["web_a1", "web_b2", None])
+        read = self.call(action="read", exhibit_id=exhibit_id)
+        self.assertEqual(read["session_id"], "web_a1")
+        self.assertEqual(read["sessions"], ["web_a1", "web_b2"])
+        self.assertEqual(read["session_history"], {"web_a1": str(history)})
+        self.assertEqual(self.call(action="list")["exhibits"][0]["session_id"], "web_a1")
+        # Exhibits made before sessions were recorded just leave the fields out.
+        self.assertNotIn("session_id", self.call(action="read", exhibit_id=self.show(title="Old")["exhibit_id"]))
+
+    def test_old_duplicate_codes_resolve_to_the_most_recent(self):
+        older = self.show(title="Older")["exhibit_id"]
+        code = older.rsplit("-", 1)[-1]
+        root = Path(os.environ["EXHIBIT_HOME"], "exhibits")
+        newer = root / f"newer-{code}"  # made before 0.2.2, when codes could repeat
+        newer.mkdir()
+        meta = json.loads((root / older / "meta.json").read_text(encoding="utf-8"))
+        (newer / "v1.html").write_text("<p>new</p>", encoding="utf-8")
+        (newer / "meta.json").write_text(json.dumps({**meta, "id": newer.name, "title": "Newer"}), encoding="utf-8")
+        os.utime(root / older / "meta.json", (1, 1))
+        self.assertEqual(self.call(action="read", exhibit_id="#" + code)["exhibit_id"], newer.name)
 
     def test_gallery_updates_in_place_after_rename_or_delete(self):
         exhibit = self.show()
