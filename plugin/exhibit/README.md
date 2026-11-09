@@ -38,15 +38,11 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 
 ### 0.2.2
 
-- **Refer to an exhibit in chat** with `@exhibit(Name #code)` (optionally `, version 2`). The agent is told exactly which exhibit you mean, with its versions, summary and saved data, even if it was renamed since. A code that matches nothing is reported instead of guessed.
-- The agent can pass that code or reference wherever it needs an exhibit, and every result includes the exhibit's reference so it can give it to you.
-- **Copy reference** on an exhibit's page (the link icon in the bar) and in the gallery's ⋯ menu, ready to paste into a chat.
-- **Delete** is now its own icon in an exhibit's bar. The exhibit's ⋯ menu is empty for now: actions in the bar aren't repeated there.
-- **Quote**: select text in an exhibit and a Quote button appears. It copies the reference plus the selected text as `>` lines (table cells joined with ` | `, cut at 1,000 characters), and the agent treats the quoted part as what you're asking about.
-- **Export** menu in an exhibit's bar, with one format for now: **HTML file**. It downloads the version you're viewing as a single file that opens on its own, with the saved data built in. Changes made in the downloaded file aren't saved back.
-- The agent assumes you mean an exhibit's latest version unless you name another.
-- Every new exhibit gets a code no other exhibit uses.
-- **Exhibits remember the chat they were made in.** Each exhibit, and each version, records its WorkSwarm chat session. The agent sees the session id, and the path of that chat's saved history, when it reads an exhibit or you refer to one, so it can look back at the conversation behind it. Exhibits made before 0.2.2 have no session recorded.
+- **User interaction improvements:** 
+  - Added the ability for users to quote / refer to a specific exhibit AND a specific highlighted piece of text in an exhibit, when chatting with the agent.
+  - Added parameter to exhibits that stores what session it originally was made in, so agent can retrieve relevant context if needed.
+  - Minor UI improvements
+- **Export** added ability to export the exhibit as HTML, and other file formats depending on the preset. (TODO)
 
 ### 0.2.1
 
