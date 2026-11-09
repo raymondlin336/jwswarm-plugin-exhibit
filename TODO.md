@@ -61,7 +61,7 @@ Last updated 2026-11-09.
 
 ## Small, any time
 
-- [ ] Retake `docs/demo.png`
+- [x] New screenshots for the README (`docs/*.webp`, 2026-11-09); the old `docs/demo.png` is no longer used
 - [ ] GitHub releases with the zips attached
 - [ ] Check the agent reliably fills in `summary` and `chat_alternative` (it did in the last deck run)
 - [x] The agent wrote the full HTML before the user was asked "Exhibit or answer in chat?": fixed in 0.2.2, the user now picks the preset (or chat) before anything is written

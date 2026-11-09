@@ -48,7 +48,6 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
   - The options so far are documents, slides, and freeform (default). These were added in order to 1. Provide agents with consistency regarding the basic structure of different types of documents, as well as save processing time 2. Allow for more controlled and easily formatted exports to common file formats
   - Before making any exhibits, the agent rail will ask the user what preset (if any) would they like to select.
   - Page controls added to the UI
-  - Presets are locked: an exhibit keeps its format (document: Letter pages inside `.sheet`; slides: 16:9 `.slide` sections; or free-form) in every new version, since the page controls and exports depend on it. Edits that break or change the format are refused, and the agent offers a new exhibit in the wanted format instead. Switching an existing exhibit's format isn't supported yet
   - Preset routing, where the agent can pick which preset to follow, is coming soon
 - **Improvements / Bug Fixes:**
   - Fixed issue where the user asking to delete multiple exhibits at once will cause user answers to never reach the agent
