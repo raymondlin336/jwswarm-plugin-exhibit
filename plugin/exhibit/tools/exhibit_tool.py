@@ -200,7 +200,9 @@ button { font:inherit; }
 .rail-item:hover { background:var(--hover); }
 .rail-item.on { background:var(--on); }
 .panel { width:264px; flex:none; background:var(--bg); border-right:1px solid var(--line); display:flex;
-  flex-direction:column; gap:10px; padding:16px 12px; min-height:0; }
+  flex-direction:column; gap:10px; padding:16px 12px; min-height:0; overflow-y:auto; }
+/* The controls keep their size; only the lists below them grow, and the column scrolls. */
+.panel > * { flex:none; }
 body.collapsed .panel { display:none; }
 .panel-head { display:flex; align-items:center; justify-content:space-between; padding:0 2px 4px 6px; }
 .panel-head b { font-size:16px; }
@@ -284,10 +286,19 @@ main { flex:1; min-width:0; overflow-y:auto; }
 .more-btn svg { width:18px; height:18px; }
 .card-wrap, .file-wrap { position:relative; min-width:0; }
 .card-wrap .card { height:100%; }
-.card-wrap .card-body { padding-right:52px; }
+.card-wrap .card-body { padding-right:86px; }
 .card-wrap .more-btn { position:absolute; right:12px; top:194px; }
-.file-wrap .file-row { padding-right:52px; }
+.card-wrap .pin-btn { position:absolute; right:46px; top:194px; }
+.file-wrap .file-row { padding-right:86px; }
 .file-wrap .more-btn { position:absolute; right:10px; top:50%; transform:translateY(-50%); }
+.file-wrap .pin-btn { position:absolute; right:44px; top:50%; transform:translateY(-50%); }
+.pin-btn { width:30px; height:30px; flex:none; display:flex; align-items:center; justify-content:center; border:0;
+  border-radius:8px; background:transparent; color:var(--muted); cursor:pointer; padding:0; }
+.pin-btn:hover { background:var(--hover); color:var(--fg); }
+.pin-btn svg { width:17px; height:17px; }
+.pin-btn.on { color:var(--accent); }
+.pin-btn.on svg { fill:currentColor; }
+.page-title { font-size:24px; margin:0 0 22px; }
 .pop-menu { position:fixed; min-width:170px; background:var(--card); border:1px solid var(--line); border-radius:10px;
   box-shadow:var(--shadow); padding:5px; z-index:20; }
 .pop-menu button { display:flex; width:100%; align-items:center; gap:8px; padding:8px 10px; border:0; border-radius:7px;
@@ -500,6 +511,10 @@ _HISTORY_ICON = (
 _CHEVRON_ICON = (
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
     'stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>'
+)
+_PIN_ICON = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" '
+    'stroke-linecap="round" aria-hidden="true"><path d="M9 4h6l-1 6 3.5 3.5V15h-11v-1.5L10 10z"/><path d="M12 15v5"/></svg>'
 )
 _DOTS_ICON = (
     '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6"/>'
@@ -1142,6 +1157,10 @@ def _delete_exhibit(exhibit_id: str) -> None:
     with _store_lock:
         shutil.rmtree(_exhibit_dir(exhibit_id))
         _close_tab(exhibit_id)
+        state = _load_ui()
+        if exhibit_id in (state.get("pinned") or []):
+            state["pinned"] = [i for i in state["pinned"] if i != exhibit_id]
+            _atomic_write(_ui_path(), json.dumps(state))
 
 
 # ------------------------------------------------------- summaries and text
@@ -1207,6 +1226,30 @@ def _set_panel_collapsed(collapsed: bool) -> None:
         state = _load_ui()
         state["panel_collapsed"] = bool(collapsed)
         _atomic_write(_ui_path(), json.dumps(state))
+
+
+def _load_pins() -> list[str]:
+    """Pinned exhibits, earliest pinned first."""
+    ids = _load_ui().get("pinned")
+    if not isinstance(ids, list):
+        return []
+    return [i for i in ids if isinstance(i, str) and _EXHIBIT_ID_RE.match(i)
+            and (_home() / "exhibits" / i / "meta.json").is_file()]
+
+
+def _set_pinned(exhibit_id: Any, pinned: bool) -> list[str]:
+    if pinned and not (isinstance(exhibit_id, str) and _EXHIBIT_ID_RE.match(exhibit_id)):
+        raise _ToolFailure("invalid_exhibit_id", "Not an exhibit id.")
+    if pinned:
+        _load_meta(exhibit_id)
+    with _store_lock:
+        state = _load_ui()
+        pins = [i for i in _load_pins() if i != exhibit_id]
+        if pinned:
+            pins.append(exhibit_id)  # newly pinned goes last: earliest pinned stays at the top
+        state["pinned"] = pins
+        _atomic_write(_ui_path(), json.dumps(state))
+        return pins
 
 
 def _open_tab(exhibit_id: str) -> list[str]:
@@ -1437,8 +1480,11 @@ class _Handler(BaseHTTPRequestHandler):
             elif isinstance(request, dict) and request.get("op") == "panel":
                 _set_panel_collapsed(request.get("collapsed") is True)
                 self._json(200, {"ok": True})
+            elif isinstance(request, dict) and request.get("op") == "pin":
+                self._json(200, {"ok": True, "pins": _set_pinned(request.get("id"), request.get("pinned") is True)})
             else:
-                self._json(400, {"error": 'Send {"op": "close", "id": "<exhibit id>"} or {"op": "panel", "collapsed": true}.'})
+                self._json(400, {"error": 'Send {"op": "close", "id": "<exhibit id>"}, {"op": "pin", "id": "<exhibit id>", '
+                                          '"pinned": true} or {"op": "panel", "collapsed": true}.'})
         except ValueError:
             self._json(400, {"error": "Body must be JSON."})
         except _ToolFailure as exc:
@@ -1480,9 +1526,22 @@ class _Handler(BaseHTTPRequestHandler):
             {"id": m["id"], "title": m["title"], "summary": m.get("summary") or "", "kind": _exhibit_kind(m)}
             for m in _list_exhibits()
         ]
+        pins = _load_pins()
+        by_id = {e["id"]: e for e in everything}
+        pinned_rows = []
+        for exhibit_id in pins:
+            entry = by_id.get(exhibit_id)
+            if entry is None:
+                continue
+            name = html_lib.escape(entry["title"])
+            on = " on" if exhibit_id == current else ""
+            pinned_rows.append(
+                f'<div class="row{on}" title="{name}"><a href="{base}e/{exhibit_id}">'
+                f'{_kind_icon(entry["kind"])}<span class="lbl">{name}</span></a></div>'
+            )
         icons = {kind: _kind_icon(kind) for kind in _KIND_ICONS}
         config = json.dumps(
-            {"base": base, "current": current, "all": everything, "icons": icons}, ensure_ascii=False
+            {"base": base, "current": current, "all": everything, "icons": icons, "pins": pins}, ensure_ascii=False
         ).replace("</", "<\\/")
         collapsed = " collapsed" if _load_ui().get("panel_collapsed") else ""
         exhibits_on = " on" if current is None else ""
@@ -1495,20 +1554,42 @@ class _Handler(BaseHTTPRequestHandler):
 <aside class="panel" aria-label="Exhibits">
 <div class="panel-head"><b>Exhibits</b>
 <button class="icon-btn" id="collapse" type="button" aria-label="Hide exhibits panel" title="Hide panel">{_COLLAPSE_ICON}</button></div>
-<a class="new-btn{new_on}" id="new-exhibit" href="{base}new">{_PLUS_ICON}New exhibit</a>
-<label class="search">{_SEARCH_ICON}<input id="q" type="search" placeholder="Search exhibits" aria-label="Search exhibits"></label>
-<a class="nav-row{exhibits_on}" href="{base}">{_GRID_ICON}All exhibits</a>
+<a class="new-btn{new_on}" id="new-exhibit" href="{base}new" aria-label="New exhibit">{_PLUS_ICON}New</a>
+<label class="search">{_SEARCH_ICON}<input id="q" type="search" placeholder="Search" aria-label="Search exhibits"></label>
+<a class="nav-row{exhibits_on}" href="{base}">{_GRID_ICON}Exhibits Gallery</a>
+<div id="pinned-section"{"" if pinned_rows else " hidden"}><div class="panel-label">Pinned</div>
+<div class="tab-list" id="pinned">{"".join(pinned_rows)}</div></div>
 <div id="open-section"><div class="panel-label">Open</div>
 <div class="tab-list" id="tabs">{"".join(rows)}</div>
 <p class="panel-empty" id="tabs-empty"{" hidden" if rows else ""}>Exhibits you open appear here.</p></div>
-<div id="results-section" hidden><div class="panel-label">Results</div><div class="tab-list" id="results"></div>
-<p class="panel-empty" id="results-empty" hidden>No exhibits match.</p></div>
 </aside>
 {main}
 {_ACTIONS_MARKUP}
 <script nonce="{nonce}">
 const config = {config};
 {_ACTIONS_SCRIPT}
+// The Pinned list in the column, earliest pinned first.
+function renderPinned() {{
+  const list = document.getElementById("pinned");
+  list.replaceChildren();
+  for (const id of config.pins) {{
+    const e = config.all.find((x) => x.id === id);
+    if (!e) continue;
+    const row = document.createElement("div");
+    row.className = "row" + (e.id === config.current ? " on" : "");
+    row.title = e.title;
+    const link = document.createElement("a");
+    link.href = config.base + "e/" + e.id;
+    link.innerHTML = config.icons[e.kind] || config.icons.freeform;  // our own markup, not the title
+    const label = document.createElement("span");
+    label.className = "lbl";
+    label.textContent = e.title;
+    link.append(label);
+    row.append(link);
+    list.append(row);
+  }}
+  document.getElementById("pinned-section").hidden = !list.children.length;
+}}
 // Close a tab.
 document.addEventListener("click", async (event) => {{
   const button = event.target.closest("[data-close]");
@@ -1538,32 +1619,15 @@ document.getElementById("rail-exhibits").addEventListener("click", (event) => {{
   event.preventDefault();
   setCollapsed(false);
 }});
-// Search all exhibits from the column.
+// Search: the gallery filters itself as you type; from any other page, Enter opens the gallery
+// with the search filled in. The column keeps showing Pinned and Open either way.
 const searchBox = document.getElementById("q");
-searchBox.addEventListener("input", () => {{
-  const q = searchBox.value.trim().toLowerCase();
-  document.getElementById("open-section").hidden = Boolean(q);
-  document.getElementById("results-section").hidden = !q;
-  const list = document.getElementById("results");
-  list.replaceChildren();
-  if (!q) return;
-  const matches = config.all.filter((e) => (e.title + " " + e.summary).toLowerCase().includes(q)).slice(0, 50);
-  for (const e of matches) {{
-    const row = document.createElement("div");
-    row.className = "row" + (e.id === config.current ? " on" : "");
-    row.title = e.title;
-    const link = document.createElement("a");
-    link.href = config.base + "e/" + e.id;
-    link.innerHTML = config.icons[e.kind] || config.icons.freeform;  // our own markup, not the title
-    const label = document.createElement("span");
-    label.className = "lbl";
-    label.textContent = e.title;
-    link.append(label);
-    row.append(link);
-    list.append(row);
-  }}
-  document.getElementById("results-empty").hidden = matches.length > 0;
-}});
+if (config.current !== null) {{
+  searchBox.addEventListener("keydown", (event) => {{
+    const q = searchBox.value.trim();
+    if (event.key === "Enter" && q) location.href = config.base + "?q=" + encodeURIComponent(q);
+  }});
+}}
 {script}
 </script></body></html>"""
 
@@ -1632,7 +1696,7 @@ titleBox.addEventListener("blur", async () => {{
     titleBox.value = savedTitle;
   }}
 }});
-// Delete this exhibit, then go to the next open one (or All exhibits).
+// Delete this exhibit, then go to the next open one (or the Exhibits Gallery).
 document.getElementById("delete-exhibit").addEventListener("click", async () => {{
   try {{
     const result = await deleteExhibit(config.current, savedTitle);
@@ -1786,8 +1850,14 @@ document.querySelectorAll(".format-card").forEach((card) => card.addEventListene
     def _gallery(self) -> None:
         base = f"/{self.token}/"
         cards, rows = [], []
-        for meta in _list_exhibits():  # newest created first
+        pins = _load_pins()
+        listed = _list_exhibits()  # newest created first
+        rank = {m["id"]: n for n, m in enumerate(listed)}
+        # Pinned first (earliest pinned at the top), then the rest, newest first.
+        ordered = sorted(listed, key=lambda m: (0, pins.index(m["id"])) if m["id"] in pins else (1, rank[m["id"]]))
+        for meta in ordered:
             exhibit_id = meta["id"]
+            pinned = exhibit_id in pins
             title = html_lib.escape(meta["title"])
             search_text = html_lib.escape(f"{meta['title']} {meta.get('summary') or ''}".casefold())
             updated = f'Updated {html_lib.escape(_stamp(meta.get("updated", "")))}'
@@ -1798,19 +1868,23 @@ document.querySelectorAll(".format-card").forEach((card) => card.addEventListene
             )
             href = f"{base}e/{exhibit_id}"
             icon = _kind_icon(_exhibit_kind(meta))
+            pin_label = "Unpin" if pinned else "Pin"
             more = (
+                f'<button class="pin-btn{" on" if pinned else ""}" type="button" data-pin="{exhibit_id}" '
+                f'aria-pressed="{"true" if pinned else "false"}" aria-label="{pin_label} {title}" title="{pin_label}">{_PIN_ICON}</button>'
                 f'<button class="more-btn" type="button" data-id="{exhibit_id}" data-title="{title}" '
                 f'aria-haspopup="menu" aria-expanded="false" aria-label="More actions for {title}" '
                 f'title="More actions">{_DOTS_ICON}</button>'
             )
+            n = rank[exhibit_id]
             cards.append(
-                f'<div class="card-wrap" data-id="{exhibit_id}" data-text="{search_text}">'
+                f'<div class="card-wrap" data-id="{exhibit_id}" data-n="{n}" data-text="{search_text}">'
                 f'<a class="card" href="{href}"><div class="thumb">{frame}</div>'
                 f'<div class="card-body"><div class="card-head">{icon}<div class="card-title">{title}</div></div>'
                 f'<div class="dates">{updated}<br>{created}</div></div></a>{more}</div>'
             )
             rows.append(
-                f'<div class="file-wrap" data-id="{exhibit_id}" data-text="{search_text}">'
+                f'<div class="file-wrap" data-id="{exhibit_id}" data-n="{n}" data-text="{search_text}">'
                 f'<a class="file-row" href="{href}" title="{title}">'
                 f'<div class="thumb mini">{frame}</div>'
                 f'<span class="file-title">{icon}<span class="file-name">{title}</span></span>'
@@ -1824,6 +1898,7 @@ document.querySelectorAll(".format-card").forEach((card) => card.addEventListene
                 "checklist, and it'll appear here.</div>"
             )
         main = f"""<main><div class="page">
+<h1 class="page-title">Exhibits Gallery</h1>
 {body}
 <div class="empty" id="none" hidden><strong>No exhibits match</strong>Try a different search.</div>
 </div></main>"""
@@ -1855,6 +1930,10 @@ function layout() {
 }
 input.addEventListener("input", layout);
 window.addEventListener("resize", layout);
+try {
+  const asked = new URLSearchParams(location.search).get("q");
+  if (asked) { input.value = asked; history.replaceState(null, "", location.pathname); }
+} catch (err) {}
 // More actions on each exhibit. Rename and delete update this page in place instead of
 // reloading it, so the other thumbnails aren't reloaded and redrawn.
 function tabRow(id) {
@@ -1876,6 +1955,8 @@ function applyRename(id, title) {
   }
   const tab = tabRow(id);
   if (tab) { tab.title = title; tab.querySelector(".lbl").textContent = title; }
+  for (const pin of document.querySelectorAll('[data-pin="' + id + '"]')) pin.setAttribute("aria-label", (pin.classList.contains("on") ? "Unpin " : "Pin ") + title);
+  if (config.pins.includes(id)) renderPinned();
 }
 function applyDelete(id) {
   config.all = config.all.filter((e) => e.id !== id);
@@ -1883,6 +1964,7 @@ function applyDelete(id) {
   const tab = tabRow(id);
   if (tab) tab.remove();
   document.getElementById("tabs-empty").hidden = document.querySelectorAll("#tabs .row").length > 0;
+  if (config.pins.includes(id)) { config.pins = config.pins.filter((p) => p !== id); renderPinned(); }
   cards = [...document.querySelectorAll(".card-wrap")];
   rows = [...document.querySelectorAll(".file-wrap")];
   if (!cards.length) { location.reload(); return; }  // show the "No exhibits yet" page
@@ -1902,6 +1984,41 @@ document.addEventListener("click", (e) => {
       try { if (await deleteExhibit(id, title)) applyDelete(id); } catch (err) { fail(err); }
     } },
   ]);
+});
+// Pin: pinned exhibits come first, earliest pinned at the top, and are listed under Pinned in the
+// column. The order is set with CSS so the thumbnails aren't moved (and reloaded).
+function applyPins() {
+  const place = (el) => {
+    const at = config.pins.indexOf(el.dataset.id);
+    return at >= 0 ? at : config.pins.length + Number(el.dataset.n);
+  };
+  for (const el of [...cards, ...rows]) el.style.order = place(el);
+  cards.sort((a, b) => place(a) - place(b));
+  rows.sort((a, b) => place(a) - place(b));
+  for (const button of document.querySelectorAll("[data-pin]")) {
+    const on = config.pins.includes(button.dataset.pin);
+    const entry = config.all.find((e) => e.id === button.dataset.pin);
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-pressed", String(on));
+    button.title = on ? "Unpin" : "Pin";
+    button.setAttribute("aria-label", (on ? "Unpin " : "Pin ") + ((entry && entry.title) || ""));
+  }
+  renderPinned();
+  layout();
+}
+document.addEventListener("click", async (e) => {
+  const button = e.target.closest("[data-pin]");
+  if (!button) return;
+  e.preventDefault();
+  const id = button.dataset.pin;
+  try {
+    const r = await fetch(config.base + "api/tabs", { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op: "pin", id, pinned: !config.pins.includes(id) }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    config.pins = j.pins;
+    applyPins();
+  } catch (err) { fail(err); }
 });
 new ResizeObserver(layout).observe(document.querySelector("main"));
 layout();
@@ -1924,7 +2041,7 @@ window.addEventListener("message", async (event) => {
   event.source.postMessage({ channel: "exhibit", reqId: m.reqId, ...reply }, "*");
 });"""
         nonce = secrets.token_urlsafe(12)
-        self._send(200, self._page("Exhibits", main, None, nonce, script),
+        self._send(200, self._page("Exhibits Gallery", main, None, nonce, script),
                    "text/html; charset=utf-8", self._shell_csp(nonce))
 
 

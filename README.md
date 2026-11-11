@@ -4,7 +4,7 @@ Exhibit lets the WorkSwarm agent build exhibits: documents, slide decks, dashboa
 
 It's a prototype of Claude-style artifacts for WorkSwarm. ("Artifact" already means self-improvement outputs in WorkSwarm's backend, so each item here is an *exhibit*.) WorkSwarm's own HTML preview blocks scripts, and its built-in browser refuses `localhost`, so a plugin can only open exhibits in the user's default browser. The longer-term fix belongs in WorkSwarm itself (see "Why a plugin" below).
 
-![The All Exhibits page: exhibits of every format, each marked with its format](docs/all-exhibits.webp)
+![The Exhibits Gallery: exhibits of every format, each marked with its format](docs/all-exhibits.webp)
 
 ## What you get
 
@@ -15,7 +15,7 @@ It's a prototype of Claude-style artifacts for WorkSwarm. ("Artifact" already me
   - **Freeform**: a freeform page, such as a dashboard, calculator or tracker.
 
   Documents, slides and charts start from a ready-made page, so they come out consistent and quickly. Freeform pages are written from scratch.
-- **The All Exhibits page.** Every exhibit with a preview, search, your open exhibits as tabs, and an icon for each exhibit's format.
+- **The Exhibits Gallery.** Every exhibit with a preview, search, your open exhibits as tabs, and an icon for each exhibit's format. Pin an exhibit to keep it at the top of the gallery and in the Pinned list in the side column.
 - **Versions and saved data.** Every change is a new version you can go back to. Exhibits can save what you enter (ticks, inputs, the slide you were on), and the agent can read it.
 - **Export.** HTML for every exhibit. PDF for documents, slides and charts. Markdown for documents. PNG for charts.
 - **Point at an exhibit in chat.** Paste a reference, or quote a passage you selected, and the agent knows exactly which exhibit and which part you mean.
@@ -118,7 +118,7 @@ Known gaps: scripts from the three CDNs are trusted; an exhibit can still beacon
 - **In WorkSwarm 0.2.7** (model deepseek-v4-flash), all of the following worked end to end:
   - making documents, slide decks and freeform exhibits from the preset dialog;
   - editing them into new versions;
-  - the All Exhibits page, deleting, references and quotes.
+  - the Exhibits Gallery, pinning, deleting, references and quotes.
 - **PDFs:** documents come out as US Letter pages that break where the screen pages do; decks as 13.33 × 7.5 in pages, one slide per page.
 - **Unit tests:** 102 in total, 56 for the tool and 46 for the rail. Two of them render real PDFs and are skipped without Edge or Chrome. They run on Python 3.11 (WorkSwarm's version) with the real openjiuwen: `powershell -File plugin\run_tests.ps1`. That uses the AgentStudio venv; set `EXHIBIT_PYTHON` to use another 3.11 interpreter.
 - **The rail's pause and resume,** and its ordering with the permission rail, run against openjiuwen's real interrupt code (AgentStudio venv, openjiuwen 0.1.17).

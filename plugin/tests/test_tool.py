@@ -1001,15 +1001,51 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn('class="card"', body)
         self.assertIn('class="file-row"', body)  # every exhibit also has a list row
         self.assertNotIn("Today<", body)  # no time-based groups
-        self.assertNotIn("<h1>", body)  # no page title
+        self.assertIn('<h1 class="page-title">Exhibits Gallery</h1>', body)
+        self.assertIn("<title>Exhibits Gallery</title>", body)
         self.assertNotIn("More exhibits", body)
         self.assertNotRegex(body, r'class="ico[ "]')  # no letter icons (icon-btn is a button)
         self.assertNotIn('id="expand"', body)  # collapsed column comes back via the rail only
         self.assertIn(f'data-close="{exhibit["exhibit_id"]}"', body)  # open as a tab in the rail
         self.assertIn('class="thumb"><iframe loading="lazy"', body)
-        self.assertIn('class="nav-row on"', body)  # All exhibits link, current page
+        self.assertIn('class="nav-row on"', body)  # Exhibits Gallery link, current page
+        self.assertIn("Exhibits Gallery</a>", body)
+        self.assertNotIn('id="results-section"', body)  # search filters the gallery, not a list in the column
+        self.assertIn('placeholder="Search"', body)
+        self.assertRegex(body, r'id="new-exhibit"[^>]*>.*?New</a>')
         self.assertNotIn("allow-same-origin", body)
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+
+    def test_pins_order_gallery_and_column(self):
+        first, second, third = self.show(title="First"), self.show(title="Second"), self.show(title="Third")
+        ids = [e["exhibit_id"] for e in (first, second, third)]
+        base = first["url"].split("/e/")[0]
+        put = lambda body: _http(base + "/api/tabs", "PUT", json.dumps(body).encode(), {"Content-Type": "application/json"})
+        _, _, body = _http(base + "/")
+        self.assertNotIn('<div id="pinned-section">', body)  # hidden while nothing is pinned
+        self.assertIn('id="pinned-section" hidden', body)
+        # Pin Second, then First: earliest pinned first, then the rest newest first.
+        self.assertEqual(json.loads(put({"op": "pin", "id": ids[1], "pinned": True})[2])["pins"], [ids[1]])
+        self.assertEqual(json.loads(put({"op": "pin", "id": ids[0], "pinned": True})[2])["pins"], [ids[1], ids[0]])
+        _, _, body = _http(base + "/")
+        cards = re.findall(r'class="card-wrap" data-id="([^"]+)"', body)
+        self.assertEqual(cards, [ids[1], ids[0], ids[2]])
+        pinned = body.split('<div class="tab-list" id="pinned">')[1].split("</div></div>\n")[0]
+        self.assertLess(pinned.index("Second"), pinned.index("First"))
+        self.assertNotIn("Third", pinned)
+        self.assertNotIn("data-close", pinned)  # pinned rows have no close button
+        self.assertLess(body.index('id="pinned-section"'), body.index('id="open-section"'))
+        self.assertEqual(body.count(f'data-pin="{ids[1]}" aria-pressed="true"'), 2)  # card and row
+        self.assertEqual(body.count(f'data-pin="{ids[2]}" aria-pressed="false"'), 2)
+        # The Pinned list shows on an exhibit's page too.
+        self.assertIn('<div class="tab-list" id="pinned"><div class="row" title="Second">', _http(third["url"])[2])
+        # Unpinning, deleting, and bad ids.
+        self.assertEqual(json.loads(put({"op": "pin", "id": ids[1], "pinned": False})[2])["pins"], [ids[0]])
+        self.call(action="delete", exhibit_id=ids[0], confirm=True)
+        self.assertEqual(MOD._load_pins(), [])
+        self.assertNotIn(ids[0], json.dumps(MOD._load_ui()))
+        self.assertEqual(put({"op": "pin", "id": "../x", "pinned": True})[0], 400)
+        self.assertEqual(put({"op": "pin", "id": ids[0], "pinned": True})[0], 404)  # deleted
 
     def test_tabs_api_closes_and_refuses_cross_site(self):
         exhibit = self.show()
