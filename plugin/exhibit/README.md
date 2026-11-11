@@ -37,7 +37,7 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 
 ## Updates
 
-### 0.3.0 (in progress)
+### 0.3.0
 
 - **Added Charts and Graphs Preset & tools:** line, area, bar, pie, donut and scatter charts with Apache ECharts. Some features include:
   - Fast and presentable charts & graphs, often with animations, interactions, highlights, etc
