@@ -4,29 +4,30 @@ Exhibit lets the WorkSwarm agent build exhibits: documents, slide decks, dashboa
 
 It's a prototype of Claude-style artifacts for WorkSwarm. ("Artifact" already means self-improvement outputs in WorkSwarm's backend, so each item here is an *exhibit*.) WorkSwarm's own HTML preview blocks scripts, and its built-in browser refuses `localhost`, so a plugin can only open exhibits in the user's default browser. The longer-term fix belongs in WorkSwarm itself (see "Why a plugin" below).
 
-![The All Exhibits page: documents, slide decks and free-form exhibits, each marked with its format](docs/all-exhibits.webp)
+![The All Exhibits page: exhibits of every format, each marked with its format](docs/all-exhibits.webp)
 
 ## What you get
 
-- **Three formats.** Before writing a new exhibit, the agent asks which kind you want:
+- **Four formats.** Before writing a new exhibit, the agent asks which kind you want:
   - **Document**: reports, proposals, memos, letters, meeting notes.
   - **Slides**: a 16:9 deck.
-  - **No preset**: a free-form page, such as a dashboard, calculator or tracker.
+  - **Charts & Graphs**: charts and stat tiles whose data you can edit.
+  - **Freeform**: a freeform page, such as a dashboard, calculator or tracker.
 
-  Documents and slides start from a ready-made page, so they come out consistent and quickly. Free-form pages are written from scratch.
+  Documents, slides and charts start from a ready-made page, so they come out consistent and quickly. Freeform pages are written from scratch.
 - **The All Exhibits page.** Every exhibit with a preview, search, your open exhibits as tabs, and an icon for each exhibit's format.
 - **Versions and saved data.** Every change is a new version you can go back to. Exhibits can save what you enter (ticks, inputs, the slide you were on), and the agent can read it.
-- **Export.** HTML for every exhibit. PDF for documents and slides. Markdown for documents.
+- **Export.** HTML for every exhibit. PDF for documents, slides and charts. Markdown for documents. PNG for charts.
 - **Point at an exhibit in chat.** Paste a reference, or quote a passage you selected, and the agent knows exactly which exhibit and which part you mean.
 - **Exhibits remember the chat they were made in,** so the agent can look up the conversation behind one.
 
 ## Formats
 
-| | Document | Slides | Free-form |
-|---|---|---|---|
-| Looks like | US Letter pages, like a word processor | 16:9 slides, one at a time | Whatever the page needs |
-| Top bar | Page control: ‹ 2 / 8 ›, type a number to jump | Slide control, plus arrow keys and swipes | — |
-| Export | HTML, PDF, Markdown (.md, or .zip with images) | HTML, PDF (one slide per page) | HTML |
+| | Document | Slides | Charts & Graphs | Freeform |
+|---|---|---|---|---|
+| Looks like | US Letter pages, like a word processor | 16:9 slides, one at a time | Chart cards and stat tiles | Whatever the page needs |
+| Top bar | Page control: ‹ 2 / 8 ›, type a number to jump | Slide control, plus arrow keys and swipes | Edit data | Edit data, if the page has charts |
+| Export | HTML, PDF, Markdown (.md, or .zip with images) | HTML, PDF (one slide per page) | HTML, PDF, PNG (the whole page) | HTML |
 
 **An exhibit's format never changes.** The page control, the page layout and the exports depend on it, so a new version must be in the same format. To get a different format, make a new exhibit. (Switching formats is on the to-do list.)
 
@@ -46,13 +47,21 @@ It's a prototype of Claude-style artifacts for WorkSwarm. ("Artifact" already me
 
 - **Text fits.** A crowded slide shrinks its text to fit, down to 60%, and scrolls past that, so nothing is cut off.
 - **Remembers your place:** the deck reopens on the slide you were on.
-- **Speaker notes:** N shows them.
 
-### Free-form
+### Charts & Graphs
 
-![A free-form exhibit: a dashboard of tasks completed per day, with stat tiles, a bar chart and a table](docs/free-form-dashboard.webp)
+![A Charts & Graphs exhibit: a budget pie chart with a tooltip, stat tiles below, and the Edit data button in the top bar](docs/charts.webp)
 
-Anything a single HTML page can do, with charts from approved CDNs (for example Chart.js) and saved data.
+- **Line, area, bar, pie, donut and scatter charts,** drawn by the plugin with Apache ECharts in the page's colours, light and dark.
+- **Stat tiles that update:** totals, averages, highest, lowest, change and growth are worked out from the chart data.
+- **Edit data in the top bar:** opens a panel beside the exhibit with each chart's values. Change values, add or remove rows, drag rows to reorder, or reset. The charts and stats redraw as you type, and edits are saved. Labels stay fixed.
+- **Export:** PDF, or PNG of the whole page.
+
+### Freeform
+
+![A freeform exhibit: a dashboard of tasks completed per day, with stat tiles, a bar chart and a table](docs/free-form-dashboard.webp)
+
+Anything a single HTML page can do, with the same charts and Edit data panel, libraries from approved CDNs, and saved data.
 
 ## Using exhibits in chat
 
@@ -75,7 +84,7 @@ Anything a single HTML page can do, with charts from approved CDNs (for example 
 
 - **One tool, `exhibit`,** with actions `show`, `preset`, `list`, `gallery`, `read`, `open`, `delete` and `stop`. Standard library only. It declares itself directly visible, because WorkSwarm's progressive tool loading would otherwise hide it behind `tool_search`.
 - **One rail, `ExhibitAskRail`.** It uses the same interrupt as WorkSwarm's `ask_user`:
-  - **Picking the preset:** before a new exhibit, it asks you to pick one (Document, Slides or No preset), plus "Answer in chat" if you didn't ask for an exhibit.
+  - **Picking the preset:** before a new exhibit, it asks you to pick one (Document, Slides or Freeform), plus "Answer in chat" if you didn't ask for an exhibit.
   - **Deletes:** it confirms every delete in a dialog.
   - **One question at a time:** WorkSwarm accepts only one answer at a time.
   - **Skill first:** it makes the agent load the exhibit skill before showing anything.
@@ -107,11 +116,11 @@ Known gaps: scripts from the three CDNs are trusted; an exhibit can still beacon
 ## Verified
 
 - **In WorkSwarm 0.2.7** (model deepseek-v4-flash), all of the following worked end to end:
-  - making documents, slide decks and free-form exhibits from the preset dialog;
+  - making documents, slide decks and freeform exhibits from the preset dialog;
   - editing them into new versions;
   - the All Exhibits page, deleting, references and quotes.
 - **PDFs:** documents come out as US Letter pages that break where the screen pages do; decks as 13.33 × 7.5 in pages, one slide per page.
-- **Unit tests:** 99 in total, 55 for the tool and 44 for the rail. Two of them render real PDFs and are skipped without Edge or Chrome. They run on Python 3.11 (WorkSwarm's version) with the real openjiuwen: `powershell -File plugin\run_tests.ps1`. That uses the AgentStudio venv; set `EXHIBIT_PYTHON` to use another 3.11 interpreter.
+- **Unit tests:** 102 in total, 56 for the tool and 46 for the rail. Two of them render real PDFs and are skipped without Edge or Chrome. They run on Python 3.11 (WorkSwarm's version) with the real openjiuwen: `powershell -File plugin\run_tests.ps1`. That uses the AgentStudio venv; set `EXHIBIT_PYTHON` to use another 3.11 interpreter.
 - **The rail's pause and resume,** and its ordering with the permission rail, run against openjiuwen's real interrupt code (AgentStudio venv, openjiuwen 0.1.17).
 - **The sandbox,** in headless Microsoft Edge:
   - saved data persisted across loads;

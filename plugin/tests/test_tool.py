@@ -79,15 +79,17 @@ class ExhibitToolTests(unittest.TestCase):
             self.assertEqual(result["preset"], name)
             self.assertRegex(result["html"], f'<meta name="exhibit-preset" content="{name}@\\d+">')
             self.assertIn("show", result["next"])
-        none = self.call(action="preset", name="None ")
-        self.assertEqual((none["preset"], "html" in none), ("none", False))
+        freeform = self.call(action="preset", name="Freeform ")
+        self.assertEqual((freeform["preset"], "html" in freeform), ("freeform", False))
+        # "none" was the old name, and still works.
+        self.assertEqual(self.call(action="preset", name="none")["preset"], "freeform")
 
     def test_preset_without_a_name_lists_them_and_bad_names_fail(self):
         listed = self.call(action="preset")
-        self.assertEqual([p["name"] for p in listed["presets"]], ["document", "slides", "none"])
+        self.assertEqual([p["name"] for p in listed["presets"]], ["document", "slides", "charts", "freeform"])
         bad = self.call(action="preset", name="poster")
         self.assertEqual((bad["success"], bad["error_code"]), (False, "invalid_preset"))
-        self.assertEqual(self.tool.card.input_params["properties"]["name"]["enum"], ["document", "slides", "none"])
+        self.assertEqual(self.tool.card.input_params["properties"]["name"]["enum"], ["document", "slides", "charts", "freeform"])
 
     def test_preset_files_follow_the_exhibit_rules(self):
         for name in ("document", "slides"):
@@ -114,7 +116,7 @@ class ExhibitToolTests(unittest.TestCase):
         deck = self.show(title="Deck", html=(MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8"))
         plain = self.show(title="Plain")
         kinds = {r["exhibit_id"]: MOD._exhibit_kind(MOD._load_meta(r["exhibit_id"])) for r in (doc, deck, plain)}
-        self.assertEqual(list(kinds.values()), ["document", "slides", "exhibit"])
+        self.assertEqual(list(kinds.values()), ["document", "slides", "freeform"])
         viewer = _http(doc["url"])[2]
         self.assertIn('class="kind kind-document"', viewer.split('id="title"')[0].rsplit("<header", 1)[1])
         # PDF export is offered for documents and slides only, by the kind of the version shown.
@@ -123,7 +125,7 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn("if (true) formats.push", _http(deck["url"])[2])
         gallery = _http(doc["url"].split("/e/")[0] + "/")[2]
         self.assertEqual(gallery.count('class="kind kind-document"'), 3)  # card, list row, open tab
-        self.assertIn('"kind": "exhibit"', gallery)  # for search results
+        self.assertIn('"kind": "freeform"', gallery)  # for search results
 
     def test_an_exhibit_never_changes_format(self):
         doc_page = (MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8")
@@ -131,9 +133,11 @@ class ExhibitToolTests(unittest.TestCase):
         doc = self.show(title="Report", html=doc_page)
         deck = self.show(title="Deck", html=deck_page)
         plain = self.show(title="Plain")
-        self.assertEqual((doc["preset"], deck["preset"], plain["preset"]), ("document", "slides", "none"))
+        self.assertEqual((doc["preset"], deck["preset"], plain["preset"]), ("document", "slides", "freeform"))
         meta = lambda r: MOD._load_meta(r["exhibit_id"])
         self.assertEqual(meta(doc)["versions"][0]["preset"], "document")  # recorded with the version
+        # Versions saved before 0.2.3 stored freeform as "exhibit": they still read as freeform.
+        self.assertEqual(MOD._exhibit_kind({"id": "x", "versions": [{"version": 1, "preset": "exhibit"}]}), "freeform")
         # An edit that keeps the format is fine.
         self.assertTrue(self.show(exhibit_id=doc["exhibit_id"], html=doc_page.replace("Q3 2026", "Q4"))["success"])
         # Any change of format is refused, in every direction, and nothing is saved.
@@ -152,6 +156,16 @@ class ExhibitToolTests(unittest.TestCase):
         raw = _http(deck["url"].replace("/e/", "/raw/") + "/1")[2]
         self.assertIn("@page{size:13.333in 7.5in!important", raw)
         self.assertIn(".slide{aspect-ratio:16/9!important}", raw)
+        # Speaker notes were removed; any left in older decks stay hidden.
+        self.assertIn("#notes-panel,.notes-panel,.slide .notes{display:none!important}", raw)
+
+    def test_missing_page_error_says_what_the_call_had(self):
+        # The agent kept insisting it sent html_file; the error now lists exactly what arrived.
+        exhibit = self.show()
+        missing = self.call(action="show", exhibit_id=exhibit["exhibit_id"], open=True)
+        self.assertEqual(missing["error_code"], "missing_html")
+        self.assertIn("Your call had only: action, exhibit_id, open.", missing["error"])
+        self.assertIn("html_file", missing["error"])
 
     def test_slides_preset_has_no_controls_of_its_own_and_fits_its_text(self):
         page = (MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8")
@@ -436,6 +450,220 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn("window.exhibit", full)
         self.assertIn('channel: "exhibit-quote"', full)  # selections can be quoted in the viewer
         self.assertNotIn('channel: "exhibit-quote"', calm)  # but not in thumbnails
+
+    def test_chart_kit_is_added_only_to_pages_that_use_it(self):
+        html = '<html><head></head><body><div id="c"></div><script>exhibit.chart("#c", {type: "line"})</script></body></html>'
+        charted = self.show(title="Charted", html=html)
+        plain = self.show(title="Plain")
+        raw = lambda r, extra="": _http(r["url"].replace("/e/", "/raw/") + "/1" + extra)[2]
+        page = raw(charted)
+        self.assertIn("host.chart = ", page)
+        self.assertIn(MOD._ECHARTS_URL, page)  # pinned ECharts, loaded from an allowed CDN
+        self.assertTrue(MOD._ECHARTS_URL.startswith("https://cdn.jsdelivr.net/"))
+        self.assertLess(page.index("window.exhibit = {"), page.index("host.chart = "))  # after the bridge
+        self.assertNotIn("host.chart = ", raw(plain))
+        # Thumbnails draw it calmly; exports bring it along.
+        thumb = raw(charted, "?thumb=1")
+        self.assertIn("host.chart = ", thumb)
+        self.assertLess(thumb.index("window.__exhibitCalm = true"), thumb.index("host.chart = "))
+        self.assertIn("host.chart = ", MOD._export_html(charted["exhibit_id"], None)[1])
+        # Interactions are on by default: series focus, pie slice details, zoom for long series,
+        # vector (SVG) drawing for the PDF, and the raw-options escape hatch.
+        kit = MOD._CHART_KIT_SCRIPT
+        for setting in ('focus: "series"', 'trigger: "item"', "p.percent", "dataZoom", 'renderer: "svg"',
+                        "aria: { enabled: true }", "spec.options", "prefers-color-scheme"):
+            self.assertIn(setting, kit)
+        self.assertNotIn("</script", kit[len("<script>"):-len("</script>")])
+        # Every chart's data can be edited, whatever its size (2026-11-10: the 100-value limit and table: false
+        # went away), and only from the viewer's Edit data panel: the page has no editor of its own. The kit
+        # reports its charts to the viewer and applies the edits, resets and PNG requests it sends back.
+        self.assertNotIn("EDIT_LIMIT", kit)
+        self.assertNotIn("spec.table", kit.replace("(spec.table is ignored)", ""))
+        self.assertNotIn("exhibit-chart-data", kit)
+        for setting in ("try { toTable(spec); editable = true; }", '"chart-data:"', "host.set(entry.key, { ...entry.table, base: entry.base })",
+                        "host.remove(entry.key)", 'channel: "exhibit-charts"', '"exhibit-chart-edit"', '"exhibit-chart-reset"',
+                        "notify(entry.spec.onChange, plainData(entry.table))",
+                        "const inViewer = parent !== window && !window.__exhibitCalm;"):
+            self.assertIn(setting, kit)
+
+    def test_calling_the_chart_kit_again_on_an_element_replaces_its_chart(self):
+        # Found 2026-11-10: a page that redrew its chart on every slider move went blank, with an
+        # extra edit table each time. A repeat call now replaces the chart, drops slower earlier
+        # calls, keeps an element's saved-data key, and edits come back only on the data they were made on.
+        kit = MOD._CHART_KIT_SCRIPT
+        for setting in ("live.set(el, ticket)", "if (!current()) return null;", "c.inst.dispose()",
+                        "c.observer.disconnect()", "echarts.getInstanceByDom(el)", "numbers.set(el, ++chartCount)",
+                        "edits.base === base"):
+            self.assertIn(setting, kit)
+
+    def test_chart_kit_runs_on_change_at_load_and_takes_colors_by_name(self):
+        # Round 3: stat tiles filled only in onChange stayed empty ("—") until an edit, and
+        # colors given by series name drew a black, dots-only line chart.
+        kit = MOD._CHART_KIT_SCRIPT
+        for setting in ("if (!nested) notify(spec.onChange, data());", "const nested = changing > 0;",
+                        "base.color = colorsFor(spec, t, series.map((s) => s.name));",
+                        "base.color = colorsFor(spec, t, data.map((d) => d.name));", "valid(c[n]) ? c[n]"):
+            self.assertIn(setting, kit)
+        self.assertNotIn("color: spec.colors ||", kit)
+
+    def test_show_notes_a_table_of_its_own_next_to_the_chart_kit(self):
+        chart = '<div id="c"></div><script>exhibit.chart("#c", {type: "line", x: [1], series: {A: [1]}%s})</script>'
+        self.assertIn("Edit data button", self.show(title="T1", html=chart % "" + "<table><tr><td>1</td></tr></table>").get("note", ""))
+        self.assertNotIn("note", self.show(title="T2", html=chart % ", table: false"))  # no longer turns the editor off
+        self.assertNotIn("note", self.show(title="T3", html=chart % ", editable: false"))
+        self.assertNotIn("note", self.show(title="T4", html="<table><tr><td>1</td></tr></table>"))  # no chart: fine
+        self.assertIn("Fix it now, before you reply", MOD._OWN_TABLE_NOTE)  # round 4: later fixes never came
+
+    def test_tool_description_keeps_what_the_rail_relies_on(self):
+        # Shortened 2026-11-10; delete, references and gallery live in the parameter descriptions.
+        text = MOD.ExhibitTool().card.description
+        for phrase in ('skill_name "exhibit"', "call preset", "[USER_CHOSE_CHAT]", "html_file",
+                       "send_file_to_user", "window.exhibit", "Skip it for short answers"):
+            self.assertIn(phrase, text)
+        self.assertLess(len(text.split()), 230)
+        params = MOD.ExhibitTool().card.input_params["properties"]
+        self.assertIn("the user confirms in a dialog", params["action"]["description"])
+        self.assertIn("@exhibit(...)", params["exhibit_id"]["description"])
+        self.assertIn("one dialog", params["exhibit_ids"]["description"])
+
+    def test_charts_preset_is_drawn_from_its_data_block_and_checked(self):
+        # Charts & Graphs (0.3.0): the agent fills in text and a JSON block; the plugin draws the charts.
+        result = self.call(action="preset", name="charts")
+        self.assertEqual(result["preset"], "charts")
+        self.assertIn('id="exhibit-charts"', result["next"])
+        self.assertEqual(self.call(action="preset", name="Charts & Graphs")["preset"], "charts")
+        page = result["html"]
+        shown = self.show(title="Sales charts", html=page)
+        self.assertEqual(MOD._exhibit_kind(MOD._load_meta(shown["exhibit_id"])), "charts")
+        raw = _http(shown["url"].replace("/e/", "/raw/") + "/1")[2]
+        self.assertIn("host.chart = ", raw)  # the kit, though the page never calls exhibit.chart(
+        self.assertIn('document.getElementById("exhibit-charts")', raw)
+        self.assertLess(raw.index("host.chart = "), raw.index('document.getElementById("exhibit-charts")'))
+        viewer = _http(shown["url"])[2]
+        self.assertIn('class="kind kind-charts"', viewer)
+        self.assertIn('label: "PDF (.pdf)"', viewer)  # PDF export, as for documents and slides
+        self.assertNotIn("note", shown)  # its data block isn't "a table of its own"
+        # A broken data block is refused, saying what's wrong; so is leaving the format.
+        for broken, words in ((page.replace('"charts": [', '"chartz": [', 1), "has no charts"),
+                              (page.replace('"type": "line"', '"type": "radar"', 1), "must be one of"),
+                              (page.replace('"prefix": "$",', '"prefix": "$",,', 1), "isn't valid JSON")):
+            failed = self.call(action="show", title="Broken", html=broken)
+            self.assertEqual(failed.get("error_code"), "preset_structure")
+            self.assertIn(words, failed["error"])
+        locked = self.call(action="show", exhibit_id=shown["exhibit_id"], html="<p>plain</p>")
+        self.assertEqual(locked.get("error_code"), "preset_locked")
+        # Stat tiles (after round 5): declared in the block, drawn and recalculated by the plugin from
+        # the chart's current data (onChange), and checked on show.
+        self.assertIn('"stats": [', page)
+        for setting in ('case "growth":', 'onChange: (data) => { latest[spec.id] = data; refresh(spec.id); }', '"exhibit-stats"'):
+            self.assertIn(setting, MOD._CHARTS_SCRIPT)
+        for broken, words in ((page.replace('"chart": "sales", "value": "sum"', '"chart": "nope", "value": "sum"', 1), "isn't in \"charts\""),
+                              (page.replace('"value": "sum" }', '"value": "median" }', 1), "must be one of"),
+                              (page.replace('"series": "North"', '"series": "South"', 1), "names series 'South'"),
+                              (page.replace('"show": "both"', '"show": "all"', 1), "must be value, label or both")):
+            failed = self.call(action="show", title="Bad stats", html=broken)
+            self.assertEqual(failed.get("error_code"), "preset_structure", broken[:0] + words)
+            self.assertIn(words, failed["error"])
+
+    def test_viewer_has_the_edit_data_button_and_png_export(self):
+        # Edit data lives in the viewer's top bar for every exhibit (shown once the page reports charts).
+        viewer = _http(self.show(title="Any")["url"])[2]
+        self.assertIn('id="data-btn"', viewer)
+        self.assertIn('id="data-panel"', viewer)
+        self.assertIn("window.exhibitDataCharts", viewer)
+        # PNG is a picture of the whole page, for every exhibit (not of one chart): the page draws itself.
+        self.assertIn('{ label: "PNG image (.png)", run: exportPng }', viewer)
+        raw = _http(self.show(title="Png")["url"].replace("/e/", "/raw/") + "/1")[2]
+        self.assertIn('m.channel !== "exhibit-snapshot"', raw)
+        self.assertIn(MOD._HTML_TO_IMAGE_URL, raw)
+        self.assertTrue(MOD._HTML_TO_IMAGE_URL.startswith("https://cdn.jsdelivr.net/"))
+        self.assertNotIn("exhibit-snapshot", MOD._inject_bridge("<p>x</p>", thumbnail=True))
+        # Edit data: values only. Labels and series names are text; a row the user adds gets a name field.
+        self.assertIn('else first.appendChild(make("span", "dp-label", row.label));', viewer)
+        self.assertIn('wrap.append(dot, make("span", "", name));', viewer)
+        # Rows move by dragging a grip or with the arrow keys on it; the chart follows the new order.
+        for setting in ('const moveRow = (from, to, focusGrip) => {', 'grip.addEventListener("keydown"', 'tr.addEventListener("drop"'):
+            self.assertIn(setting, viewer)
+        self.assertIn('"exhibit-chart-edit"', viewer)
+        self.assertIn('"exhibit-chart-reset"', viewer)
+
+    def test_new_exhibit_page_offers_formats_and_a_conversation(self):
+        # New exhibit opens a page: a box to ask WorkSwarm and the four formats with previews.
+        # Neither is connected (a plugin can't start a chat); both say so.
+        shown = self.show(title="Any")
+        base = shown["url"].split("/e/")[0] + "/"
+        viewer = _http(shown["url"])[2]
+        self.assertIn(f'href="{base.split("127.0.0.1:")[1].split("/", 1)[1]}new"'.replace('href="', 'href="/'), viewer)
+        status, _, page = _http(base + "new")
+        self.assertEqual(status, 200)
+        self.assertIn('class="new-btn on"', page)
+        for name in ("Document", "Slides", "Charts &amp; Graphs", "Freeform"):
+            self.assertIn(name, page)
+        self.assertEqual(page.count('class="card format-card"'), 4)
+        self.assertIn('id="ask-text"', page)
+        self.assertIn("Not connected yet", page)
+        for kind in ("document", "slides", "charts"):
+            status, _, preview = _http(base + "preset/" + kind)
+            self.assertEqual(status, 200)
+            self.assertIn("window.__exhibitCalm = true", preview)  # drawn like a thumbnail
+        self.assertEqual(_http(base + "preset/freeform")[0], 404)
+
+    def test_edit_data_panel_resizes_and_has_no_edited_dot(self):
+        viewer = _http(self.show(title="Any")["url"])[2]
+        self.assertIn('id="dp-resize" role="separator"', viewer)
+        self.assertIn('const PANEL_WIDTH_KEY = "exhibit-data-panel-width";', viewer)
+        self.assertIn("Math.max(320, Math.min(w, room - 320))", viewer)
+        self.assertNotIn("data-dot", viewer)
+
+    def test_a_made_up_id_says_to_leave_it_out_for_a_new_exhibit(self):
+        result = self.call(action="show", exhibit_id="bakeoff-sales-echarts", title="Sales", html="<p>x</p>")
+        self.assertFalse(result.get("success"))
+        self.assertIn("leave exhibit_id out", json.dumps(result))
+
+    def test_skill_makes_exhibits_interactive_and_uses_the_chart_kit(self):
+        skill = (TOOL_FILE.parents[1] / "skills" / "exhibit" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("Make it interactive, whether or not the user asked", skill)
+        self.assertIn("#### Interactive by default", skill)
+        self.assertIn("exhibit.chart(", skill)
+        self.assertNotIn("100 values", skill)  # every chart has the Edit data table
+        self.assertIn("every chart's data can be edited from the **Edit data** button in the exhibit's top bar", skill)
+        self.assertIn('**Charts & Graphs** (`"preset": "charts"`)', skill)
+        self.assertNotIn("chart.js@", skill)  # the kit replaced the hand-written Chart.js advice
+        # Phase 4: the agent hand-wrote ECharts, so the skill says not to, and names onChange for linked parts.
+        self.assertIn("Don't load Chart.js, ECharts or any other chart library for these", skill)
+        self.assertNotIn("ECharts itself is fine", skill)
+        self.assertIn("onChange(data)", skill)
+        # Round 2: pages that saved the chart's data themselves broke Reset, and copies of the data went stale.
+        self.assertIn("never a saved copy, and don't save the chart's data with `exhibit.set`", skill)
+        self.assertIn("call `exhibit.chart` again on the same element", skill)
+        # Round 3: read-only copies of chart data, and `table: false` used to hide the editor.
+        self.assertIn("Never add a read-only table that repeats a chart's data", skill)
+        self.assertNotIn("`table: false` hides the table", skill)
+        self.assertIn("It runs once when the chart first draws", skill)
+        # Skill trim (2026-11-10): preset before gathering data, scripted counts, which chart for what.
+        self.assertIn("before you gather data or read files for it", skill)
+        self.assertIn("count them with a script, not by reading", skill)
+        self.assertIn("| Change over time |", skill)
+        self.assertNotIn("Updates from elsewhere", skill)
+        self.assertLess(len(skill.splitlines()), 220)  # 245 before the trim
+        self.assertIn("never from the original count or positions", skill)
+
+    def test_freeform_points_to_the_chart_kit_and_show_notes_own_chart_libraries(self):
+        freeform = self.call(action="preset", name="freeform")["next"]
+        self.assertIn("exhibit.chart(element, spec)", freeform)
+        self.assertIn("pass it the original data and use onChange", freeform)
+        own = ('<html><head><script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>'
+               "</head><body><div id=c></div></body></html>")
+        noted = self.show(title="Own chart", html=own)
+        self.assertIn("exhibit.chart(element, spec)", noted.get("note", ""))
+        kit = '<div id="c"></div><script>exhibit.chart("#c", {type: "line", x: [1], series: {A: [1]}})</script>'
+        self.assertNotIn("note", self.show(title="Kit chart", html=kit))
+        self.assertNotIn("note", self.show(title="No chart"))
+        # Round 5: a line chart drawn with d3 had no Edit data; d3 counts, and the note asks for the fix now.
+        d3 = self.show(title="D3 chart", html='<html><head><script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script></head><body></body></html>')
+        self.assertIn("fix it now, before you reply", d3.get("note", ""))
+        other = '<html><head><script src="https://cdn.jsdelivr.net/npm/dayjs@1.11.13/dayjs.min.js"></script></head><body></body></html>'
+        self.assertNotIn("note", self.show(title="Dates", html=other))
 
     def test_viewer_offers_copy_reference_and_quote(self):
         exhibit = self.show()

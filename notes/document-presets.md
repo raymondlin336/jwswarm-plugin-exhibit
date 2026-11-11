@@ -68,7 +68,7 @@ Why the dialog sits on `preset` and not on `show`: the pick changes what the age
   - arrow keys, Page Up/Down, Space, Home/End;
   - swipe on touch screens;
   - a counter and prev/next buttons;
-  - N toggles a speaker-notes panel (`aside.notes`; kept for a later PowerPoint export).
+  - (Removed in 0.3.0.) N toggled a speaker-notes panel (`aside.notes`).
 - **Saved position:** the current slide is saved with the exhibit.
 - **Print:** one slide per landscape 13.333 × 7.5 in page, always light, no controls.
 - **Phones held upright:** all slides in a scrolling column, with text at a readable size.
@@ -121,7 +121,7 @@ Moving between slides is no longer in the preset. The plugin injects one script 
 - In an exported HTML file (no viewer), it draws the same small buttons inside the page. They're hidden on paper and in the PDF.
 - Older decks: it hides v1's `.controls` bar and v2's `.edge` arrows, and catches keys and swipes first (capture phase), so their own handlers never move a second slide.
 
-The preset (v3) keeps numbering, text fitting and the notes toggle (N). It tells the agent not to add slide buttons or navigation scripts.
+The preset (v3) keeps numbering and text fitting (the notes toggle was removed in 0.3.0). It tells the agent not to add slide buttons or navigation scripts.
 
 ## Pages for documents, and the top-bar page control (2026-11-09)
 

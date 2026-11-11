@@ -3,14 +3,14 @@
 PRESET slides v3. A 16:9 slide deck: presentation, pitch, briefing, lesson, workshop.
 
 How to use it:
-- Keep the <style> block, the notes panel and the <script> at the end as they are. To restyle,
+- Keep the <style> block and the <script> at the end as they are. To restyle,
   change only the variables on :root (and their dark and print copies).
 - Don't add buttons or scripts for moving between slides: Exhibit adds its own to every deck.
 - Set <html lang> to the user's language and set <title>.
 - Replace the sample slides with yours: one <section class="slide ..."> per slide, in order.
   Replace every sample sentence and number; slide numbers update themselves.
 - Write each headline as the point of the slide ("Weekend tickets wait twice as long"), not a topic
-  label ("Weekend data"). Put detail the speaker needs, but the audience doesn't, in the notes.
+  label ("Weekend data").
 - Usually a title slide, the content, and a closing slide with the ask or next steps.
 
 Fitting text: a slide has a fixed size. When a slide's content doesn't fit, the page shrinks that
@@ -39,7 +39,6 @@ Blocks for a standard slide:
 - Chart: <figure> with an inline SVG chart colored with the CSS variables (see the sample), and
   an optional <figcaption> for the source.
 
-Speaker notes: <aside class="notes">...</aside> inside a slide. Hidden until the user presses N.
 Moving between slides is added by Exhibit: buttons at the top right, arrow keys, Page Up/Down,
 Space, Home/End and swiping. It shows the slide with class "active" and remembers where the user was.
 The PDF (Export, then PDF) has one slide per page.
@@ -148,28 +147,18 @@ body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--sa
 .slide.end h2 { font-size: calc(var(--u) * 4.2); }
 .slide.end ol { font-size: calc(var(--u) * 2.6); }
 
-/* notes (N) */
-.notes { display: none; }
-body.show-notes .deck { inset: 0 0 116px 0; }
-body.show-notes .slide { width: min(calc(100vw - 32px), calc((100vh - 148px) * 16 / 9)); }
-.notes-panel { display: none; position: fixed; left: 0; right: 0; bottom: 0; height: 116px; overflow: auto; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--paper); font-size: 14px; line-height: 1.5; }
-body.show-notes .notes-panel { display: block; }
-
-
 /* Phones held upright: show every slide in a scrolling column, with text at a readable size. */
 @media screen and (max-width: 640px) and (orientation: portrait) {
   :root { --u: 6.2px; }
   body { overflow: auto; }
   .deck { position: static; display: block; place-items: normal; padding: 12px 12px 64px; }
-  .slide, body.show-notes .slide { display: block; width: auto; aspect-ratio: auto; margin: 0 0 12px; }
+  .slide { display: block; width: auto; aspect-ratio: auto; margin: 0 0 12px; }
   .slide > .in { position: relative; min-height: 56vw; padding: 28px 22px 34px; }
   .slide.title > .in { padding-left: 34px; padding-bottom: 56px; }
   .slide.title > .in::before { left: 20px; }
   .slide.title .by { left: 34px; bottom: 24px; }
   .slide.quote > .in { padding: 32px 26px 32px 44px; }
   .numbers, .columns { grid-auto-flow: row; }
-  .notes-panel { display: none !important; }
-  body.show-notes .notes { display: block; font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 16px; padding-top: 10px; }
 }
 
 /* Print: every slide, one per landscape page. */
@@ -177,9 +166,8 @@ body.show-notes .notes-panel { display: block; }
 @media print {
   html, body { height: auto; overflow: visible; background: none; }
   .deck { position: static; display: block; place-items: normal; }
-  .slide, body.show-notes .slide { display: block !important; width: 13.333in; height: 7.5in; aspect-ratio: auto; border: 0; border-radius: 0; box-shadow: none; break-after: page; }
+  .slide { display: block !important; width: 13.333in; height: 7.5in; aspect-ratio: auto; border: 0; border-radius: 0; box-shadow: none; break-after: page; }
   .slide:last-child { break-after: auto; }
-  .notes-panel, .notes { display: none !important; }
   .slide.overfull > .in { overflow: hidden; }
 }
 /* ---- end slides base ---- */
@@ -193,7 +181,6 @@ body.show-notes .notes-panel { display: block; }
   <h1>Weekend support cover</h1>
   <p class="sub">Faster replies all week, except at the weekend. A proposal to close the gap.</p>
   <p class="by">Customer Operations · 9 November 2026</p>
-  <aside class="notes">Five minutes. The ask is on the last slide: approve a weekend rota from 5 December.</aside>
 </div></section>
 
 <section class="slide"><div class="in">
@@ -239,7 +226,6 @@ body.show-notes .notes-panel { display: block; }
     <li>Nobody is scheduled on Saturdays; Sunday cover is voluntary and uneven.</li>
   </ul>
   <p class="takeaway">The December sale lands on a weekend: about 900 tickets with no one on shift.</p>
-  <aside class="notes">Mention the complaint volume from last December if asked.</aside>
 </div></section>
 
 <section class="slide"><div class="in">
@@ -265,12 +251,11 @@ body.show-notes .notes-panel { display: block; }
 </div></section>
 
 </main>
-<div class="notes-panel" id="notes-panel" aria-live="polite"></div>
 <script>
 (() => {
   // Moving between slides is not done here: Exhibit adds it to every deck (buttons, keys, swipes,
-  // the remembered slide), and shows the slide with class "active". This script numbers the slides,
-  // fits their text and toggles the speaker notes.
+  // the remembered slide), and shows the slide with class "active". This script numbers the slides
+  // and fits their text.
   const slides = [...document.querySelectorAll(".slide")];
   slides.forEach((s, n) => { s.dataset.n = n + 1; });
   if (slides.length && !slides.some((s) => s.classList.contains("active"))) slides[0].classList.add("active");
@@ -284,7 +269,7 @@ body.show-notes .notes-panel { display: block; }
     const bottom = box.bottom - parseFloat(style.paddingBottom) + 1;
     const right = box.right - parseFloat(style.paddingRight) + 1;
     for (const el of inner.querySelectorAll("*")) {
-      if (el.closest(".notes") || getComputedStyle(el).position === "absolute") continue;
+      if (getComputedStyle(el).position === "absolute") continue;
       const r = el.getBoundingClientRect();
       if (!r.width && !r.height) continue;
       if (r.bottom > bottom || r.right > right) return true;
@@ -325,13 +310,6 @@ body.show-notes .notes-panel { display: block; }
   let fitting = 0;
   const refit = () => { cancelAnimationFrame(fitting); fitting = requestAnimationFrame(fitAll); };
 
-  // Speaker notes: N shows the current slide's notes under it.
-  addEventListener("keydown", (e) => {
-    if (e.target.closest("input, textarea, select, [contenteditable]") || e.altKey || e.ctrlKey || e.metaKey) return;
-    if (e.key !== "n" && e.key !== "N") return;
-    document.body.classList.toggle("show-notes");
-    e.preventDefault();
-  });
   fitAll();
   addEventListener("resize", refit);
   if (document.fonts) document.fonts.ready.then(refit);

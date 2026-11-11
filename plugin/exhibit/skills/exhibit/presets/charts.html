@@ -1,0 +1,132 @@
+<!doctype html>
+<!--
+PRESET charts v2. Charts & Graphs: one or more charts of the user's data, with a title, a
+one-sentence takeaway and stat tiles.
+
+Exhibit draws the stat tiles and the charts from the data block at the end of this page. Every
+chart gets hover details, legend toggles, zooming for long series and theme colors. The user edits
+the data with the Edit data button in the exhibit's top bar, and the stat tiles recalculate. Don't
+write chart code, load chart libraries, or add tables, stat tiles, buttons or scripts of your own:
+change only the text and the data block.
+
+How to use it:
+- Set <html lang> to the user's language, and set <title>, the <h1>, the .lede and the .source
+  line (or delete the .source line).
+- The .lede is the main takeaway in one sentence. Keep numbers from the data out of it and out of
+  captions: put them in "stats", which follow the user's edits.
+- Replace the sample in <script type="application/json" id="exhibit-charts"> with the user's. It
+  must stay valid JSON: double quotes, no comments, no trailing commas.
+- "charts": a list of charts. Each is an object:
+  - "id": short and stable across versions; the user's edits are saved per id, and stats name it.
+  - "type": line | area | bar | pie | donut | scatter. Change over time: line (area with
+    "stack": true for parts of a total). Comparing categories: bar ("horizontal": true for long
+    labels or many categories). Parts of a whole, 8 or fewer: pie or donut. Two measures: scatter.
+  - "title": what the chart shows.
+  - The data. line, area and bar: "x": [labels] and "series": {"Name": [numbers], ...}.
+    pie and donut: "data": {"Label": number, ...}. scatter: "series": {"Name": [[x, y], ...]}
+    with "xLabel" and "yLabel".
+  - Optional: "prefix" and "suffix" (like "$" and "k"), "decimals", "stack": true,
+    "horizontal": true, "smooth": false, "height" (pixels, 360 by default), "colors" (a list, or
+    colors by series name), "caption" (one sentence under the chart, without numbers from the
+    data), and "width": "half" (two half-width charts sit side by side).
+  - Each chart shows its own data: data the user gave or you counted. Don't add a chart worked
+    out from another chart's data (totals by month, shares of a total, the same data as bars):
+    it wouldn't follow the user's edits. Use stats for totals, averages, bests and growth.
+- "stats" (optional, 2 to 4 is best): tiles above the charts, worked out from a chart's current
+  data. Each is an object:
+  - "label": what it is ("Total sales"), "chart": the id of the chart it comes from.
+  - "value": sum | average | max | min | count (rows) | first | last | change (last minus first) |
+    growth (change as a percentage of the first).
+  - Optional: "series": one series of a line, area or bar chart (otherwise all series added up
+    row by row); "show": "label" (the row's label, like "Dec", for max, min, first or last) or
+    "both" ("Dec ($74k)"); "prefix", "suffix" and "decimals" (the chart's by default); "note"
+    (a short line under the number, without numbers from the data).
+  - Not for scatter charts.
+- Use the exact numbers. When they come from files, count them with a script.
+- Keep the <style> as it is. To restyle, change only the variables on :root (and their dark copy).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="exhibit-preset" content="charts@2">
+<title>Regional sales, 2025</title>
+<style>
+:root { --bg:#ffffff; --fg:#1d1d1b; --muted:#6b6b66; --line:#e2e2dc; --card:#f8f8f5; --accent:#2563eb; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#18181a; --fg:#ececea; --muted:#a3a39e; --line:#34363b; --card:#202124; --accent:#60a5fa; }
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 "Segoe UI", system-ui, -apple-system, sans-serif; }
+main { max-width:1040px; margin:0 auto; padding:36px 28px 56px; }
+h1 { font-size:26px; line-height:1.25; margin:0 0 6px; letter-spacing:-.01em; }
+.lede { font-size:16px; color:var(--muted); margin:0 0 22px; max-width:72ch; }
+.charts { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:20px; }
+.chart-card { grid-column:span 2; margin:0; background:var(--card); border:1px solid var(--line); border-radius:14px;
+  padding:18px 18px 14px; break-inside:avoid; }
+.chart-card.half { grid-column:span 1; }
+.chart-card figcaption { color:var(--muted); font-size:13.5px; margin-top:8px; }
+.charts-error { border:1px dashed var(--line); border-radius:10px; padding:14px 16px; color:var(--muted); }
+.source { color:var(--muted); font-size:12.5px; margin:22px 0 0; }
+@media (max-width:760px) {
+  main { padding:24px 16px 40px; }
+  .chart-card.half { grid-column:span 2; }
+}
+@media print {
+  @page { size:letter; margin:0.6in; }
+  :root { --bg:#ffffff; --fg:#1d1d1b; --muted:#555550; --card:#ffffff; }
+  main { max-width:none; padding:0; }
+  .chart-card { border-color:#d8d8d2; }
+  .chart-card.half { grid-column:span 2; }  /* one chart per row on paper: charts are drawn at this width */
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>Regional sales, 2025</h1>
+  <p class="lede">North pulled ahead in spring and kept growing; West recovered after a slow first half.</p>
+  <div class="charts" id="charts"></div>
+  <p class="source">Source: monthly sales reports, thousands of dollars.</p>
+</main>
+<script type="application/json" id="exhibit-charts">
+{
+  "stats": [
+    { "label": "Total sales", "chart": "sales", "value": "sum" },
+    { "label": "Best month", "chart": "sales", "value": "max", "show": "both" },
+    { "label": "North growth", "chart": "sales", "series": "North", "value": "growth", "note": "December against January" },
+    { "label": "Orders", "chart": "channels", "value": "sum", "note": "online and in stores" }
+  ],
+  "charts": [
+    {
+      "id": "sales",
+      "type": "line",
+      "title": "Monthly sales by region",
+      "x": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+      "series": {
+        "North": [42, 45, 48, 51, 55, 60, 63, 61, 58, 62, 68, 74],
+        "West": [50, 48, 46, 47, 45, 44, 46, 49, 52, 56, 60, 63]
+      },
+      "prefix": "$",
+      "suffix": "k"
+    },
+    {
+      "id": "channels",
+      "type": "donut",
+      "title": "Orders by channel",
+      "data": { "Online": 4120, "Stores": 6380 },
+      "width": "half"
+    },
+    {
+      "id": "returns",
+      "type": "bar",
+      "title": "Returns by quarter",
+      "x": ["Q1", "Q2", "Q3", "Q4"],
+      "series": { "North": [31, 28, 26, 22], "West": [35, 33, 30, 27] },
+      "width": "half",
+      "caption": "Returns fell in both regions every quarter."
+    }
+  ]
+}
+</script>
+</body>
+</html>

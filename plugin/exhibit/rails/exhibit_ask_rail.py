@@ -1,7 +1,7 @@
 """Dialogs and guards for the exhibit tool, enforced in code instead of left to the agent.
 
 1. Preset question: before a new exhibit is written, the agent calls `exhibit` preset and the user
-   always picks what kind it is: Document, Slides or No preset (details below). A new exhibit
+   always picks what kind it is: Document, Slides or Freeform (details below). A new exhibit
    can't be shown until they have picked.
 2. Delete confirmation: every `exhibit` delete asks "Delete '<title>'?" in WorkSwarm's dialog.
    Picking Delete lets the call run with confirm set; anything else cancels it.
@@ -23,7 +23,7 @@ pauses `exhibit` calls with the same interrupt mechanism WorkSwarm's ask_user
 uses, so the user gets the regular option dialog. The agent never decides
 whether to ask, and there is no routing yet: the user always picks.
 
-- The `preset` call is paused and the user picks Document, Slides or No preset.
+- The `preset` call is paused and the user picks Document, Slides or Freeform.
   The paused call then runs with their pick written into it, so the agent gets
   that starting page back. Later preset calls before the exhibit is shown reuse it.
 - The dialog also offers "Answer in chat" unless the user's message this turn
@@ -32,7 +32,7 @@ whether to ask, and there is no routing yet: the user always picks.
   agent to answer in chat instead.
 - A `show` for a new exhibit is refused until the user has picked, once per new
   exhibit. Edits with exhibit_id, read, open, list, delete and stop never ask.
-- The dialog's Skip button counts as "you decide": No preset, still an exhibit.
+- The dialog's Skip button counts as "you decide": Freeform, still an exhibit.
   Cancel stops the call.
 """
 
@@ -84,11 +84,13 @@ _TEXT = {
         "preset_or_chat_question": "Should I make this an exhibit, and which kind?",
         "preset_header": "Exhibit",
         "document": "Document",
-        "document_desc": "A page that prints well: report, brief, memo or meeting notes",
+        "document_desc": "Page by page document, export as PDF or .md",
         "slides": "Slides",
-        "slides_desc": "A slide deck you click through, one slide per printed page",
-        "no_preset": "No preset",
-        "no_preset_desc": "A free-form page: chart, dashboard, calculator, tracker, prototype or anything else",
+        "slides_desc": "A slide deck for presentations, export as PDF",
+        "charts": "Charts & Graphs",
+        "charts_desc": "Dynamic visualizations of data, export as PDF or PNG.",
+        "freeform": "Freeform",
+        "freeform_desc": "Written from scratch, no standard formats or templates.",
         "chat": "Answer in chat",
         "chat_desc": "A static chart (SVG or PNG), a table, or a document (PDF, Word or Excel) here in the conversation",
         "delete_question": "Delete \u201c{title}\u201d?",
@@ -106,11 +108,13 @@ _TEXT = {
         "preset_or_chat_question": "要做成展品吗？做成哪种？",
         "preset_header": "展品",
         "document": "文档",
-        "document_desc": "适合打印的页面：报告、简报、备忘录或会议纪要",
+        "document_desc": "逐页排版的文档，可导出为 PDF 或 .md",
         "slides": "幻灯片",
-        "slides_desc": "可逐页翻看的演示文稿，打印时每页一张",
-        "no_preset": "不用预设",
-        "no_preset_desc": "自由页面：图表、仪表盘、计算器、跟踪表、原型等",
+        "slides_desc": "用于演示的幻灯片，可导出为 PDF",
+        "charts": "图表",
+        "charts_desc": "数据的动态可视化，可导出为 PDF 或 PNG。",
+        "freeform": "自由页面",
+        "freeform_desc": "从零编写，没有固定格式或模板。",
         "chat": "在对话中回答",
         "chat_desc": "在对话中给出静态图表（SVG 或 PNG）、表格，或文档（PDF、Word 或 Excel）",
         "delete_question": "删除\u201c{title}\u201d？",
@@ -131,14 +135,14 @@ _CHOSE_CHAT = (
     "The HTML you wrote was not shown."
 )
 _FREE_TEXT = (
-    "[USER_REPLIED] The user was asked what kind of exhibit they want (document, slides or no preset), "
+    "[USER_REPLIED] The user was asked what kind of exhibit they want (document, slides, charts or freeform), "
     "and replied in their own words: {answer!r}. Follow their reply. If they want an exhibit, call "
-    "exhibit preset again with the name that fits (document, slides or none); you won't be asked again "
+    "exhibit preset again with the name that fits (document, slides, charts or freeform); you won't be asked again "
     "this turn. Otherwise answer in chat."
 )
 _CHOOSE_PRESET = (
     "[CHOOSE_PRESET] Not shown yet: before a new exhibit, call exhibit with action preset (no name "
-    "needed). The user picks a document, slides or no preset, and you get the starting page. Write the "
+    "needed). The user picks a document, slides, Charts & Graphs or freeform, and you get the starting page. Write the "
     "exhibit from it, then call show again."
 )
 _CANCELLED = (
@@ -178,8 +182,9 @@ _LOAD_SKILL = (
 _MAX_SAME_FAILURES = 3
 _STOP_LOOP = (
     "[STOP_RETRYING] Not sent: this same exhibit call has already failed {count} times this turn with: "
-    "{error} Sending it again won't help. Change the call (for a missing or long page, save it with "
-    "write_file and pass its path as html_file), or stop and tell the user plainly what went wrong."
+    "{error} Your call had only: {fields}. Sending it again won't help. Change the call (for a missing "
+    "or long page, save it with write_file and pass its path as html_file), or stop and tell the user "
+    "plainly what went wrong."
 )
 _DECLINED_THIS_TURN = (
     "[USER_CHOSE_CHAT] The user already chose an answer in chat for this request. "
@@ -246,7 +251,7 @@ def _chat_alternative(args: dict[str, Any]) -> str:
 
 
 def _question(language: str, with_chat: bool, alternative: str = "") -> dict[str, Any]:
-    """The preset question, with "Answer in chat" as a fourth option when that's still open."""
+    """The preset question, with "Answer in chat" as a last option when that's still open."""
     t = _TEXT[language]
     options = [{"label": t[key], "description": t[f"{key}_desc"]} for key in _PRESET_KEYS]
     if with_chat:
@@ -282,7 +287,7 @@ def _labels(*keys: str) -> dict[str, str]:
 
 
 # Dialog option -> the preset name the tool takes.
-_PRESET_KEYS = {"document": "document", "slides": "slides", "no_preset": "none"}
+_PRESET_KEYS = {"document": "document", "slides": "slides", "charts": "charts", "freeform": "freeform"}
 _PRESET_LABELS = _labels(*_PRESET_KEYS, "chat")
 _DELETE_LABELS = _labels("delete", "keep")
 
@@ -499,6 +504,63 @@ def _offer_chat(gate: dict[str, Any]) -> bool:
     return not (gate.get("chose_exhibit") or gate.get("mentioned_this_turn") or gate.get("replied_this_turn"))
 
 
+# --------------------------------------------- no "Custom" in our dialogs
+# WorkSwarm adds an "Other" option ("Custom input") to every question that has options, and its
+# dialog shows it as "Custom", a box to type an answer. In our dialogs it isn't a real choice (the
+# kind of exhibit, or delete / keep), so it's removed from them only. WorkSwarm has no setting for
+# this, so the plugin wraps the function that builds the dialog's questions (in
+# jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers). If a WorkSwarm update moves
+# or changes it, nothing is wrapped and the dialogs just keep "Custom". Every other question in
+# WorkSwarm is left as it was.
+_HELPERS_MODULE = "jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers"
+_OUR_HEADERS = {text[key] for text in _TEXT.values() for key in ("preset_header", "delete_header")}
+_OUR_LABELS = {text[key] for text in _TEXT.values()
+               for key in ("document", "slides", "charts", "freeform", "chat", "delete", "keep")}
+
+
+def _without_custom(questions: Any) -> Any:
+    """Drop WorkSwarm's added "Other" option from the questions that are ours."""
+    if not isinstance(questions, list):
+        return questions
+    for item in questions:
+        if not isinstance(item, dict) or item.get("header") not in _OUR_HEADERS:
+            continue
+        options = item.get("options")
+        if not isinstance(options, list):
+            continue
+        labels = [o.get("label") for o in options if isinstance(o, dict)]
+        ours = [label for label in labels if label != "Other"]
+        if ours and all(label in _OUR_LABELS for label in ours):
+            item["options"] = [o for o in options if not (isinstance(o, dict) and o.get("label") == "Other")]
+    return questions
+
+
+def _drop_custom_option() -> bool:
+    """Wrap WorkSwarm's question builder once, so our dialogs have no "Custom". True if wrapped."""
+    try:
+        import importlib
+
+        helpers = importlib.import_module(_HELPERS_MODULE)
+    except Exception:  # noqa: BLE001 - not in WorkSwarm, or it moved: leave the dialogs as they are
+        return False
+    build = getattr(helpers, "_build_multi_questions", None)
+    if not callable(build):
+        return False
+    if getattr(build, "_exhibit_wrapped", False):
+        return True
+
+    def build_without_custom(*args: Any, **kwargs: Any) -> Any:
+        built = build(*args, **kwargs)
+        try:
+            return _without_custom(built)
+        except Exception:  # noqa: BLE001 - never break WorkSwarm's dialogs
+            return built
+
+    build_without_custom._exhibit_wrapped = True  # type: ignore[attr-defined]
+    helpers._build_multi_questions = build_without_custom
+    return True
+
+
 # ------------------------------------------------------------------- rail
 
 
@@ -544,6 +606,7 @@ class ExhibitAskRail(BaseInterruptRail):
             super().__init__(tool_names=[_TOOL_NAME, _SEND_FILE_TOOL, _SKILL_TOOL, _WRITE_FILE_TOOL])
         else:
             super().__init__()
+        _drop_custom_option()
 
     # Session state ---------------------------------------------------------
     @staticmethod
@@ -714,7 +777,9 @@ class ExhibitAskRail(BaseInterruptRail):
 
         failed = (gate.get("failures") or {}).get(_call_shape(args))
         if failed and int(failed.get("count", 0)) >= _MAX_SAME_FAILURES:
-            return self.reject(tool_result=_STOP_LOOP.format(count=failed["count"], error=failed.get("error", "")))
+            fields = ", ".join(k for k, v in args.items() if v not in (None, "", [], {})) or "nothing"
+            return self.reject(tool_result=_STOP_LOOP.format(count=failed["count"], error=failed.get("error", ""),
+                                                              fields=fields))
 
         action = args.get("action")
         if action == "delete":
@@ -731,6 +796,8 @@ class ExhibitAskRail(BaseInterruptRail):
         if gate.get("declined_this_turn"):
             return self.reject(tool_result=_DECLINED_THIS_TURN)
         if action == "show":
+            if not (args.get("html") or args.get("html_file")):
+                return self.approve()  # no page at all: the tool's missing_html says what's wrong, not "pick a preset"
             if self._stateful(ctx) and not gate.get("preset"):
                 return self.reject(tool_result=_CHOOSE_PRESET)
             return self.approve()
@@ -778,7 +845,7 @@ class ExhibitAskRail(BaseInterruptRail):
         if choice in _PRESET_KEYS or choice == "skip":
             if choice != "skip":
                 gate["chose_exhibit"] = True  # Skip means "you decide": an exhibit, but ask again next time
-            gate["preset"] = _PRESET_KEYS.get(choice, "none")
+            gate["preset"] = _PRESET_KEYS.get(choice, "freeform")
             self._save_gate(ctx, gate)
             return self.approve(new_args=self._rewritten_args(tool_call, args, name=gate["preset"]))
         if choice in ("cancel", "chat"):

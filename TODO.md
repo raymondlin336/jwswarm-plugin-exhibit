@@ -1,6 +1,6 @@
 # Exhibit to-do
 
-Last updated 2026-11-09.
+Last updated 2026-11-10.
 
 ## Released
 
@@ -16,9 +16,69 @@ Last updated 2026-11-09.
 
 ## Pinned
 
+### 0.3.0: interactive charts that feel like Claude's artifacts
+Today the agent hand-writes every chart, usually Chart.js with default tooltips, so data exhibits feel flat. For example, hovering a line doesn't highlight it, and pie slices give no details. Claude's artifacts get this from a library with good defaults (Recharts), not from the model. Plan:
+- [ ] Phase 1: bake-off of Chart.js vs Apache ECharts vs Vega-Lite, using what deepseek-v4-flash produces with each (`notes/chart-bakeoff.md`)
+  - [x] Objective checks: reliability, correctness, robustness, cost (2026-11-10, `eval/chart_check.py`). ECharts matched Chart.js on reliability and gave clearly more interaction; Vega-Lite was weakest. Recommendation: ECharts.
+  - [ ] Subjective judging, method 1: blind pairwise votes by the user and coworkers (WebDev Arena style)
+  - [ ] Subjective judging, method 2: a vision-model judge with a checklist per prompt and scripted screenshots (ArtifactsBench style), calibrated against method 1
+  - Details for both methods are in `notes/chart-bakeoff.md`, under "Judging the subjective part"
+- [ ] Small tool fix found in the bake-off: when the agent passes a made-up `exhibit_id` for a new exhibit, make `exhibit_not_found` say to leave `exhibit_id` out for a new exhibit
+- [x] Phase 2: `exhibit.chart(el, spec)` on ECharts 5.5.1, added by the plugin to pages that call it, with interactions on by default (2026-11-10):
+  - series focus on hover, tooltips with every series, legend toggles;
+  - pie slice details (value, %), zooming past 24 points, transitions (off in thumbnails);
+  - theme colors (page accent first), light/dark redraw, resizing;
+  - SVG drawing, so PDFs get vector charts;
+  - `spec.options` as the escape hatch for raw ECharts options;
+  - a data table if ECharts can't load.
+  - an editable data table under every chart (edit, add, remove, reset; saved in the exhibit's data), added on 2026-11-10 at the user's request. First only up to 100 values; since 2026-11-10 on every chart, with no way to turn it off.
+  Checked with `eval/chart_samples.py` (8 samples), `eval/chart_check.py` and `eval/chart_hover.py`; results in `notes/chart-bakeoff.md`.
+- [ ] Phase 3: skill guidance. Started 2026-11-10:
+  - [x] "Interactive by default": every exhibit is interactive whether or not the user asked (editable data, tables only when wanted and then editable, inputs for assumptions);
+  - [x] a "Charts: `exhibit.chart`" section with an example, replacing the Chart.js advice;
+  - [ ] still to do: an example per chart type, and the rest of the plan below.
+  Original plan: a "Data and charts" section in the skill, with an example per chart type and an interaction checklist (hover detail, sortable tables, linked highlights, visible filters). Adapt ideas from LibreChat's open-source artifact instructions (MIT, credited). Move the document preset's SVG chart to `exhibit.chart`.
+- [ ] Phase 4: rerun the bake-off prompts and the "Tasks Completed Per Day" dashboard with the kit; add them to the test prompts
+  - [x] Round 1 (2026-11-10, dev build): only 1 of 9 runs used `exhibit.chart`; the others hand-wrote ECharts. Data editing was missing or poor in places. Fixed in dev2 (agent pointed to the kit, redesigned editor, `onChange`).
+  - [x] Round 2 (dev2): 9 of 9 used `exhibit.chart`, rubric 0.89. New issues: pages that save the chart's data themselves break Reset (2 of 9); duplicate or unlinked parts (2 of 9).
+  - [x] Skill fix for those two: the kit saves edits, so always pass the original data and use `onChange` only to update the page; don't repeat the chart's data in another table (0.3.0 build).
+  - [x] Kit fix (0.3.0 build): the tracker dashboard went blank after a slider move because it called `exhibit.chart` again on the same element. Repeat calls now replace the chart, and saved edits stay with the data they were made on.
+  - [x] Round 3 (12 runs): 12 of 12 used the kit, rubric 0.79. Read-only copies of the chart's data in 6 of 12 (never wanted, says the user), empty stat tiles in 2 (`onChange` only ran at load after edits), dots-only lines in 1 (`colors` by name). Fixed in the kit, skill and `show` note.
+  - [x] Round 4 (10 runs): rubric 0.95, nothing broken after controls, edits, deleted rows and Reset. Read-only tables in 2 of 10 final pages (3 added, 1 removed after the `show` note).
+  - [x] The `show` note about an extra table now asks for the fix right away, before replying (the user's call, 2026-11-10). It also says to reread the file before editing it, after Sales 10's failed edit.
+  - [ ] Check it in the next round: tables left in final pages, and how many extra calls the fixes cost
+  - [x] Skill trimmed and aligned (2026-11-10): shorter description, Errors section cut to two entries, one way to change a chart's data, an `onChange` example that fills stat tiles, export formats, `preset` before gathering data, scripted counts, a which-chart table. About 20% fewer words. The tool description was shortened the same day (about 390 words to 200).
+  - [x] "Edit data" on every chart: the 100-value limit and `table: false` are gone. A 365-row table opens in about 40 ms.
+  - [x] Charts & Graphs preset (2026-11-10, the user's call, part of 0.3.0): a fourth option in the picker. The agent fills in text and a JSON block of chart specs; the plugin draws the charts. PDF, HTML and PNG export.
+  - [x] Edit data moved into the viewer's top bar (2026-11-10): one panel for every chart on the page, in every exhibit; the only way to edit a chart's data. The in-page editor is gone. PNG export of each chart from the Export menu.
+  - [x] Round 5 (12 runs, 3 as Charts & Graphs): rubric 0.85. Store 6 drew its chart with d3 (no Edit data): d3 now counts for the `show` note, which asks for the fix now. Labels are now read-only in Edit data, and PNG export is the whole page.
+  - [x] Charts & Graphs stat tiles that follow edits (2026-11-10, the user's call): declared in the data block, recalculated by the plugin from the chart's current data; checked on show. The preset now rules out charts worked out from another chart, and numbers from the data in the text.
+  - [x] Edit data rows can be moved by dragging a grip or with the arrow keys, old rows and new (2026-11-10, the user's call, instead of sorting added rows automatically). The picker's descriptions are the user's wording.
+  - [ ] Round 6: prompts E to L (new kinds of chart and data, in `notes/chart-bakeoff.md`), each once as Freeform and once as Charts & Graphs; watch the chart type picked, stats, derived charts, nulls, negatives, d3 and read-only tables
+  - [ ] Check in WorkSwarm that the picker shows all five options (four kinds and "Answer in chat") well
+  - [x] No "Custom" in the picker or the delete dialog (2026-11-10, the user's call). WorkSwarm's `_build_multi_questions` (in `jiuwenswarm.agents.harness.common.rails.interrupt.interrupt_helpers`) appends "Other" to every question with options, with no setting; the rail wraps it and drops "Other" from our two dialogs only. Check it in WorkSwarm. For the core proposal: a per-question flag to leave out the custom answer.
+
+### More built-in kits, after the chart kit (version to decide)
+Same approach as `exhibit.chart`: the plugin supplies the tool with good defaults and the skill points the agent to it, so quality doesn't depend on the model remembering. This is how Claude's artifacts get their polish (React with shadcn/ui, Tailwind, lucide, Recharts), adapted to plain HTML. Start after phase 4 shows how well the agent picks up `exhibit.chart`.
+- [ ] Diagram kit: `exhibit.diagram(el, text)` on Mermaid (MIT), added only to pages that call it, like the chart kit.
+  - Flowcharts, sequences, timelines, mind maps and so on, written as text, instead of hand-drawn SVG (the flat-tire how-to on 2026-11-09 had 8 rough drawings).
+  - Theme colors in light and dark, redrawn on a theme change; sized to its container; vector in PDFs.
+  - A visible message on a syntax error.
+  - Skill guidance with examples.
+  - Check it the way the chart kit was checked (samples, errors, contrast, overflow, print).
+- [ ] UI kit: a small set of ready-made parts for plain HTML, written into the plugin (no CDN, works offline, about 15 to 25 KB), with class names prefixed `ex-` and following the page's color variables.
+  - Start with:
+    - `exhibit.table(el, rows)`: sortable columns, search past about 15 rows, number formatting, and optional editable cells saved with the exhibit;
+    - stat tiles: a headline number with a label and a change;
+    - filter buttons that filter tables and charts on the page together.
+  - Then: tabs, sections that open and close, inputs and sliders that recalculate linked numbers and charts, cards, callouts, and a small inline icon set (for example a lucide subset, MIT).
+  - It must fit inside the document and slides presets without restyling them.
+  - Skill guidance with short examples. Measure with the test prompts before and after.
+- Not planned: React, Tailwind or shadcn themselves. Compiling JSX in the page is heavier and gives a fast model more ways to fail.
+
 ### Exhibit formats and routing
 - [ ] A diverse set of exhibit presets, each a ready-made renderer the agent fills with content instead of writing the whole page:
-  chart / dashboard, document / report, slides, table / data, calculator / tool, tracker / checklist, mockup / prototype, diagram; free-form HTML stays as the fallback. Document and slides are done (0.2.2)
+  chart / dashboard, document / report, slides, table / data, calculator / tool, tracker / checklist, mockup / prototype, diagram; free-form HTML stays as the fallback. Document and slides are done (0.2.2); Charts & Graphs (0.3.0)
 - [ ] Routing: pick the preset from the request's intent, then load only that preset's instructions (today the user always picks)
 - [x] Start with one preset and compare it with hand-written exhibits: document and slides built in 0.2.2
 - [ ] Compare preset exhibits with free-form ones on the same prompts (time, tool calls, rubric score)
@@ -34,7 +94,7 @@ Last updated 2026-11-09.
 - [x] Self-contained HTML, with saved data baked in, 0.2.2
 - [x] PDF for documents and slides, printed by a hidden Edge or Chrome, 0.2.2
 - [x] Markdown for documents (.md with embedded charts, or .zip with images/), 2026-11-09
-- [ ] Per-preset formats: Word for documents, PowerPoint for slides, Excel / CSV for tables, PNG / SVG for charts and diagrams
+- [ ] Per-preset formats: Word for documents, PowerPoint for slides, Excel / CSV for tables, SVG for charts, PNG / SVG for diagrams (PNG of charts done in 0.3.0)
 
 ### Referring to and quoting exhibits
 - [x] Refer to an exhibit in chat (`@exhibit(Name #code)`, Copy reference) so the agent knows which one you mean and can read it, 0.2.2
@@ -44,7 +104,7 @@ Last updated 2026-11-09.
 ## Next
 
 - [ ] Let the agent write an exhibit's saved data (refresh numbers without a new version)
-- [ ] Look into "Continue in chat" from an exhibit, which also hooks up the New exhibit button
+- [ ] Look into "Continue in chat" from an exhibit, which also hooks up the New exhibit page (built 2026-11-10: an ask box and the four formats with previews, not connected; needs WorkSwarm to let a plugin start a chat)
 - [ ] An exhibit button that sends a message to the agent (may wait for the core feature)
 - [ ] Measuring: about ten test prompts scored with the 1 / 0.75 / 0.5 / 0 rubric, run before and after changes
 

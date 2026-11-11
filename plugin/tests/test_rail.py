@@ -71,7 +71,7 @@ class FakeToolCall:
 
 SHOW_NEW = {"action": "show", "title": "Chart", "html": "<p>x</p>"}
 PRESET = {"action": "preset"}
-OPTIONS = ["Document", "Slides", "No preset"]
+OPTIONS = ["Document", "Slides", "Charts & Graphs", "Freeform"]
 
 
 class ExhibitAskRailTests(unittest.TestCase):
@@ -119,6 +119,21 @@ class ExhibitAskRailTests(unittest.TestCase):
 
     def test_watches_exhibit_send_file_skill_and_write_tools(self):
         self.assertEqual(self.rail.get_tools(), {"exhibit", "send_file_to_user", "skill_tool", "write_file"})
+
+    def test_a_show_with_no_page_gets_the_tools_error_not_choose_preset(self):
+        # An empty show used to get [CHOOSE_PRESET], which sent the agent the wrong way.
+        self.turn("make me a dashboard")
+        self.assertEqual(self.resolve(action="show", title="Dash").kind, "approve")  # the tool says missing_html
+
+    def test_stop_retrying_lists_the_fields_the_call_had(self):
+        self.turn("change it")
+        shape = MOD._call_shape({"action": "show", "exhibit_id": "budget-abc123"})
+        gate = dict(self.session.state.get(MOD._STATE_KEY) or {})
+        gate["failures"] = {shape: {"count": 3, "error": "No page was sent."}}
+        self.session.state[MOD._STATE_KEY] = gate
+        decision = self.resolve(action="show", exhibit_id="budget-abc123")
+        self.assertEqual(decision.kind, "reject")
+        self.assertIn("Your call had only: action, exhibit_id.", str(decision.tool_result))
 
     def test_show_without_a_page_uses_the_page_just_saved(self):
         # deepseek-v4-flash saved the page with write_file, then sent ~20 show calls without html_file.
@@ -189,7 +204,7 @@ class ExhibitAskRailTests(unittest.TestCase):
         self.assertEqual(question["question"], MOD._TEXT["en"]["preset_question"])
 
     def test_the_users_pick_is_written_into_the_call(self):
-        for answer, name in (("Document", "document"), ("Slides", "slides"), ("No preset", "none")):
+        for answer, name in (("Document", "document"), ("Slides", "slides"), ("Freeform", "freeform")):
             self.turn("make an exhibit")
             self.mark_asked()
             call = FakeToolCall(action="preset", name="document")  # the agent's own guess is replaced
@@ -239,21 +254,21 @@ class ExhibitAskRailTests(unittest.TestCase):
         self.turn("chart this data")
         args = dict(PRESET, chat_alternative="A static bar chart image   of the scores")
         (question,) = self.resolve(**args).request.questions
-        self.assertEqual(question["options"][3]["description"], "A static bar chart image of the scores")
+        self.assertEqual(question["options"][-1]["description"], "A static bar chart image of the scores")
         decision = self.resolve({"a": "Answer in chat"}, **args)
         self.assertIn("you offered: A static bar chart image of the scores", decision.tool_result)
 
     def test_generic_chat_description_is_used_without_an_alternative(self):
         self.turn("chart this data")
         (question,) = self.resolve(**PRESET).request.questions
-        self.assertEqual(question["options"][3]["description"], MOD._TEXT["en"]["chat_desc"])
+        self.assertEqual(question["options"][-1]["description"], MOD._TEXT["en"]["chat_desc"])
         decision = self.resolve({"a": "Answer in chat"}, **PRESET)
         self.assertNotIn("you offered", decision.tool_result)
 
     def test_long_alternative_is_trimmed(self):
         self.turn("chart this data")
         (question,) = self.resolve(**dict(PRESET, chat_alternative="x" * 500)).request.questions
-        self.assertLessEqual(len(question["options"][3]["description"]), MOD._MAX_ALTERNATIVE_CHARS)
+        self.assertLessEqual(len(question["options"][-1]["description"]), MOD._MAX_ALTERNATIVE_CHARS)
 
     def test_choosing_chat_rejects_and_blocks_retries_this_turn(self):
         self.turn("chart this data")
@@ -279,14 +294,14 @@ class ExhibitAskRailTests(unittest.TestCase):
         self.assertEqual(json.loads(call.arguments)["name"], "slides")  # the agent's pick is kept
         self.assertEqual(self.resolve().kind, "approve")
 
-    def test_skip_button_means_no_preset_without_remembering(self):
+    def test_skip_button_means_freeform_without_remembering(self):
         self.turn("chart this data")
         self.mark_asked()
         call = FakeToolCall(**PRESET)
         skipped = {"answers": {"q": "用户已跳过此题，未选择任何选项。"}}
         decision = asyncio.run(self.rail.resolve_interrupt(FakeCtx(self.session), call, skipped))
         self.assertEqual(_decision(decision).kind, "approve")
-        self.assertEqual(json.loads(call.arguments)["name"], "none")
+        self.assertEqual(json.loads(call.arguments)["name"], "freeform")
         self.assertEqual(self.resolve().kind, "approve")
         self.turn("chart the other table")
         (question,) = self.resolve(**PRESET).request.questions
@@ -304,10 +319,50 @@ class ExhibitAskRailTests(unittest.TestCase):
         self.turn("chart this data")
         self.assertEqual(self.resolve({"answers": {"q": "  "}}, **PRESET).kind, "interrupt")
 
+    def test_preset_descriptions_are_the_users_wording(self):
+        options = {o["label"]: o["description"] for o in MOD._question("en", False)["options"]}
+        self.assertEqual(options, {
+            "Document": "Page by page document, export as PDF or .md",
+            "Slides": "A slide deck for presentations, export as PDF",
+            "Charts & Graphs": "Dynamic visualizations of data, export as PDF or PNG.",
+            "Freeform": "Written from scratch, no standard formats or templates.",
+        })
+
+    def test_our_dialogs_have_no_custom_option(self):
+        # WorkSwarm adds "Other" (shown as "Custom") to every question with options; the rail wraps
+        # its builder so our dialogs drop it, and leaves everyone else's questions alone.
+        import sys
+        name = MOD._HELPERS_MODULE
+        fake = types.ModuleType(name)
+
+        def build(questions_data):
+            return [{"question": q["question"], "header": q.get("header", "Question"),
+                     "options": [*q["options"], {"label": "Other", "description": "Custom input"}],
+                     "multi_select": False} for q in questions_data]
+
+        fake._build_multi_questions = build
+        saved = sys.modules.get(name)
+        sys.modules[name] = fake
+        try:
+            self.assertTrue(MOD._drop_custom_option())
+            self.assertTrue(MOD._drop_custom_option())  # wraps once
+            ours = [MOD._question("en", True), MOD._question("zh", False), MOD._delete_question("en", ["Budget"])]
+            for built in fake._build_multi_questions(ours):
+                self.assertNotIn("Other", [o["label"] for o in built["options"]])
+            theirs = fake._build_multi_questions([{"question": "Which file?", "header": "Exhibit",
+                                                   "options": [{"label": "a.txt"}, {"label": "b.txt"}]}])
+            self.assertEqual([o["label"] for o in theirs[0]["options"]], ["a.txt", "b.txt", "Other"])
+        finally:
+            if saved is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = saved
+        self.assertFalse(MOD._drop_custom_option())  # outside WorkSwarm: nothing to wrap
+
     def test_chinese_request_gets_chinese_options(self):
         self.turn("帮我把这个基准测试做成图表")
         (question,) = self.resolve(**PRESET).request.questions
-        self.assertEqual([o["label"] for o in question["options"]], ["文档", "幻灯片", "不用预设", "在对话中回答"])
+        self.assertEqual([o["label"] for o in question["options"]], ["文档", "幻灯片", "图表", "自由页面", "在对话中回答"])
         self.assertEqual(self.resolve({"a": "幻灯片"}, **PRESET).kind, "approve")
 
     def test_resume_turn_keeps_state(self):
