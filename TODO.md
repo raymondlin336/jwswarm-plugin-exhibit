@@ -60,12 +60,22 @@ Today the agent hand-writes every chart, usually Chart.js with default tooltips,
 
 ### More built-in kits, after the chart kit (version to decide)
 Same approach as `exhibit.chart`: the plugin supplies the tool with good defaults and the skill points the agent to it, so quality doesn't depend on the model remembering. This is how Claude's artifacts get their polish (React with shadcn/ui, Tailwind, lucide, Recharts), adapted to plain HTML. Start after phase 4 shows how well the agent picks up `exhibit.chart`.
-- [ ] Diagram kit: `exhibit.diagram(el, text)` on Mermaid (MIT), added only to pages that call it, like the chart kit.
-  - Flowcharts, sequences, timelines, mind maps and so on, written as text, instead of hand-drawn SVG (the flat-tire how-to on 2026-11-09 had 8 rough drawings).
-  - Theme colors in light and dark, redrawn on a theme change; sized to its container; vector in PDFs.
-  - A visible message on a syntax error.
-  - Skill guidance with examples.
-  - Check it the way the chart kit was checked (samples, errors, contrast, overflow, print).
+- [x] Diagram kit (0.4.0, 2026-11-11): `<pre class="exhibit-diagram">` with Mermaid 12.3.0 text, added only to pages that have one. Decisions and the full Mermaid map in `notes/mermaid-map.md`.
+  - Done: theme colors light and dark (redrawn on a switch), the neo look with ELK (hidden `diagram_look` setting for classic), fit to width, `<br>` labels, error message in place, `show` notes (own Mermaid, Mermaid charts, unknown type), skill section, PDF and PNG checked in headless Edge.
+  - Done, same day: interaction (hover focus, click details, zoom, step-through listed or automatic, `exhibit.diagram` hook), and the skill asks for a step-through whenever a diagram shows an order.
+  - [x] Hover, click and steps for every diagram type, with automatic steps for Gantt, journey, gitGraph and event modeling too (2026-11-11)
+  - [ ] Baseline and kit rounds: prompts M to T in the vault note "Exhibit diagram prompts"
+    - Round 1 (2026-11-11) ran the 14:50 build (`727c828d8a4e`), not the interactive kit, so it doesn't count as the kit round. From it: timelines step per event, `show` notes flowcharts and state diagrams with no `%% step` lines, and the skill tells agents to hand-build visuals that move with real state (explainers, like the BFS/DFS page).
+    - Round 2 (2026-11-11, build `8a39a8a81616`): 5 of 8 at 1. Order states failed (quoted state names), the timeline chat stopped after `preset` with no page. Decision (the user's call): no more per-type syntax patches. Instead `show` opens the saved page in headless Edge (about 1 s) and returns a `note` with Mermaid's exact error, empty diagrams and script/console errors, plus `page_text` (what the user will see). The round-1 `;` and `:` rewrites were removed; the source block is `display:none`; any step line counts as a caption on ordered types.
+    - [x] Rerun M to T on the rebuilt `exhibit-0.4.0.zip`, after reinstalling it in WorkSwarm, and screenshot every page
+    - Round 3 (2026-11-11 17:15, build `6cf7299d3b23`): 7 of 8 at 1, traffic 0.75. All 8 drew and every step-through worked. No `show` returned a note. Traffic's first version had 1,300 visitors and "undefined" labels; the agent read `page_text`, fixed it and showed v2 without being told. Open, measured at 1280 px wide:
+      - [x] Diagram text too small to read: order states 8.4 px, timeline 7.5 px, login 10.9 px (refund, schema, mind map 14 px). Wide diagrams were shrunk to fit the column. Fixed both ways (build `b685eae2a94a`): the kit starts a wide diagram at the size where its labels are 11 px and scrolls sideways (Zoom out still fits it; print fits), and the render check reports any drawing, kit or hand-made SVG, whose text is under 10 px.
+      - [x] Step focus can be off-screen: on the slide deck's tall flowchart, step 3 highlights Web App above the visible area while the controls stay below. Fixed: Back, Next, Play and `goTo` scroll the lit parts into view (inside a scrolling diagram, then the page or slide), with the controls too when both fit.
+      - [ ] Rerun M to T on build `b685eae2a94a` in WorkSwarm and screenshot every page
+      - [ ] Not caught by any check: traffic's per-source tiles wrap badly; the refund flowchart sits right of the column; several pages repeat "use the buttons above" under the controls.
+  - [ ] Check in WorkSwarm
+- [x] Local copy of the libraries (0.4.0): ECharts, Mermaid and html-to-image downloaded on first use into `~/.exhibit/lib`, checked by SHA-256, served by the plugin, CDN as the fallback. Sandboxed pages never reuse the browser cache (measured: ECharts re-downloaded on every load in 0.3.0).
+  - [ ] Check in WorkSwarm, and in Chrome and Firefox (only headless Edge so far)
 - [ ] UI kit: a small set of ready-made parts for plain HTML, written into the plugin (no CDN, works offline, about 15 to 25 KB), with class names prefixed `ex-` and following the page's color variables.
   - Start with:
     - `exhibit.table(el, rows)`: sortable columns, search past about 15 rows, number formatting, and optional editable cells saved with the exhibit;

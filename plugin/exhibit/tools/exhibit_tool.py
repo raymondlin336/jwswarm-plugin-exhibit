@@ -95,7 +95,12 @@ _FREEFORM_NEXT = (
     "zooming and theme colors, and the user edits its data with the Edit data button in the exhibit's top bar. "
     "The kit saves those edits itself: pass it "
     "the original data and use onChange to update the rest of the page. Don't add a table that repeats a chart's "
-    "data: the chart shows it, and Edit data edits it."
+    "data: the chart shows it, and Edit data edits it. "
+    "For flowcharts, sequence, state and other boxes-and-arrows diagrams, write Mermaid text in "
+    "<pre class=\"exhibit-diagram\">...</pre>; Exhibit draws it and makes it interactive. When it shows an order "
+    "(a process, a flow through systems, state changes), add %% step lines for a step-through (see the exhibit "
+    "instructions). Don't load Mermaid. To explain how something works (an algorithm, a simulation), draw it "
+    "yourself in SVG or canvas so it moves with the real state, with Play, Step and Reset."
 )
 # A page that loads its own chart library gets this note in the show result. Round 5 (2026-11-10): a
 # store-sales page drew its line chart with d3, so it had no Edit data; d3 is on the list, and the note
@@ -111,6 +116,99 @@ _OWN_CHART_NOTE = (
     "else needs it (read the file again before editing it, or write it whole), and call show again with this "
     "exhibit_id. Keep the library only for other kinds of visual (maps, networks and so on)."
 )
+# Diagrams (0.4.0): the agent writes Mermaid in <pre class="exhibit-diagram"> and the plugin draws it.
+# Pages that bring their own Mermaid get a note, and so do diagrams the kit can tell are wrong before
+# drawing: no diagram type on the first line, or a Mermaid chart (data that belongs in exhibit.chart).
+_DIAGRAM_BLOCK = re.compile(r"<pre\b([^>]*\bclass=[\"'][^\"']*\bexhibit-diagram\b[^\"']*[\"'][^>]*)>(.*?)</pre>", re.I | re.S)
+_OWN_MERMAID = re.compile(r"<script[^>]+src=[\"'][^\"']*mermaid|import\s+mermaid\b|from\s+[\"'][^\"']*mermaid|"
+                          r"<(?:pre|div)\b[^>]*\bclass=[\"'](?:[^\"']*\s)?mermaid(?:\s[^\"']*)?[\"']", re.I)
+_OWN_MERMAID_NOTE = (
+    "This page loads or uses Mermaid itself. Exhibit draws Mermaid diagrams for you: put each diagram's Mermaid "
+    "text in <pre class=\"exhibit-diagram\">...</pre> (see the exhibit instructions), with no Mermaid script or "
+    "class=\"mermaid\". The plugin then draws it in the page's colours, light and dark, and in the PDF. Fix it now, "
+    "before you reply: change the page (read the file again before editing it, or write it whole) and call show "
+    "again with this exhibit_id."
+)
+_DIAGRAM_TYPES = {
+    "flowchart", "graph", "sequencediagram", "classdiagram", "classdiagram-v2", "statediagram", "statediagram-v2",
+    "erdiagram", "journey", "gantt", "pie", "quadrantchart", "requirementdiagram", "gitgraph", "c4context",
+    "c4container", "c4component", "c4dynamic", "c4deployment", "mindmap", "timeline", "sankey", "sankey-beta",
+    "xychart", "xychart-beta", "block", "block-beta", "packet", "packet-beta", "kanban", "architecture-beta",
+    "radar-beta", "treemap", "treemap-beta", "venn-beta", "ishikawa-beta", "wardley-beta", "treeview-beta",
+    "eventmodeling", "cynefin-beta", "railroad-beta", "railroad-ebnf-beta", "railroad-abnf-beta",
+    "railroad-peg-beta", "swimlane-beta", "usecase-beta", "agentflow-beta",
+}
+# Mermaid's charts: numbers belong in exhibit.chart, where the user can edit them.
+_MERMAID_CHARTS = {"pie", "xychart", "xychart-beta", "quadrantchart", "sankey", "sankey-beta", "radar-beta",
+                   "treemap", "treemap-beta"}
+
+
+def _diagram_sources(page: str) -> list[str]:
+    """The Mermaid text of each exhibit-diagram block, as the kit reads it (tags other than <br> dropped)."""
+    sources = []
+    for match in _DIAGRAM_BLOCK.finditer(page):
+        text = re.sub(r"<br\s*/?>", "\x00", match.group(2), flags=re.I)
+        text = html_lib.unescape(re.sub(r"<[^>]+>", "", text)).replace("\x00", "<br>")
+        sources.append(text)
+    return sources
+
+
+def _diagram_type(source: str) -> str:
+    """The diagram type a Mermaid text starts with ('' when there is none), skipping frontmatter and comments."""
+    lines = source.splitlines()
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    if i < len(lines) and lines[i].strip() == "---":  # frontmatter
+        i += 1
+        while i < len(lines) and lines[i].strip() != "---":
+            i += 1
+        i += 1
+    for line in lines[i:]:
+        text = line.strip()
+        if not text or text.startswith("%%"):
+            continue
+        return text.split()[0].rstrip(":").lower()
+    return ""
+
+
+def _diagram_note(page: str) -> str | None:
+    """A note for show about the page's diagrams, or None when they look right."""
+    if _OWN_MERMAID.search(page):
+        return _OWN_MERMAID_NOTE
+    problems, charts = [], []
+    for n, source in enumerate(_diagram_sources(page), 1):
+        kind = _diagram_type(source)
+        if kind in _MERMAID_CHARTS:
+            charts.append(f"diagram {n} ({kind})")
+        elif kind not in _DIAGRAM_TYPES:
+            beta = f"{kind}-beta"
+            hint = f' Did you mean "{beta}"? Newer diagram types end in -beta.' if beta in _DIAGRAM_TYPES else ""
+            problems.append(f'diagram {n} starts with "{kind or "(nothing)"}", which isn\'t a Mermaid diagram type.{hint}')
+    if charts:
+        return (f"{', '.join(charts).capitalize()} is a chart made with Mermaid. Numbers belong in exhibit.chart "
+                "(see the exhibit instructions), where the user can edit them from Edit data. Fix it now, before you "
+                "reply: replace it with exhibit.chart and call show again with this exhibit_id.")
+    if problems:
+        return ("A diagram can't be drawn: " + " ".join(problems) + " The first line of each exhibit-diagram block "
+                "must be the diagram type, such as flowchart LR, sequenceDiagram, stateDiagram-v2 or erDiagram. Fix "
+                "it now and call show again with this exhibit_id.")
+    # Kit round 1 (2026-11-11): no flowchart or state diagram got %% step lines, so they were static.
+    stepless = [f"diagram {n}" for n, source in enumerate(_diagram_sources(page), 1)
+                if _diagram_type(source) in _STEPPED_BY_HAND and not _STEP_LINE.search(source)]
+    if stepless:
+        return (f"{', '.join(stepless).capitalize()} has no step-through. If it shows an order (the steps of a "
+                "process, state changes, a request moving through systems), add %% step lines (see the exhibit "
+                "instructions) and call show again with this exhibit_id. If it only shows structure, add "
+                "\"%% steps: off\" next time and leave this one.")
+    return None
+
+
+# Types whose step-through the agent lists itself; the others step through on their own or have no order.
+_STEPPED_BY_HAND = {"flowchart", "graph", "statediagram", "statediagram-v2"}
+_STEP_LINE = re.compile(r"^\s*%%\s*steps?\b", re.M | re.I)
+
+
 # A chart-kit page that also builds its own table. Round 3 of the
 # chart bake-off: half the pages added a read-only copy of the chart's data. From round 4 the note asks
 # for the fix right away (the user's call): "fix when you next change it" left 2 of 10 in place.
@@ -142,6 +240,122 @@ _PAGE_CSP = "; ".join(
         "base-uri 'none'",
     ]
 )
+
+
+
+def _page_csp(origins: str = "") -> str:
+    """The exhibit page policy, also allowing scripts from the plugin's own server (its local copy
+    of the libraries) when origins are given."""
+    if not origins:
+        return _PAGE_CSP
+    return _PAGE_CSP.replace(f"script-src 'unsafe-inline' 'unsafe-eval' {_CDNS}",
+                             f"script-src 'unsafe-inline' 'unsafe-eval' {_CDNS} {origins}")
+
+
+# The libraries the plugin's scripts load, pinned. The plugin keeps a checked copy of each in its
+# folder (lib/) and serves it itself: exhibit pages run in an opaque-origin frame, which browsers
+# give an empty cache on every load, so without the copy each chart page downloads ECharts again
+# (and each diagram page, Mermaid). Pages try the copy first and fall back to the CDN, so they work
+# before the copy is there, and in exported files.
+_LIBRARIES: dict[str, dict[str, Any]] = {
+    "echarts": {
+        "file": "echarts-5.5.1.min.js",
+        "url": "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js",
+        "sha256": "e84270bd0cd5bdf60fefc26d00c2a391cb2e81f4d26a7a9ee16185a54773a3cf",
+        "size": 1_030_855,
+    },
+    "mermaid": {
+        "file": "mermaid-12.3.0.min.js",
+        "url": "https://cdn.jsdelivr.net/npm/mermaid@12.3.0/dist/mermaid.min.js",
+        "sha256": "336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3",
+        "size": 5_537_838,
+    },
+    "html-to-image": {
+        "file": "html-to-image-1.11.11.js",
+        "url": "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js",
+        "sha256": "0181b9a4ea3351540751b2e72b6baecb5c2297093fcb0bd2af94fc531cb0fbda",
+        "size": 19_568,
+    },
+}
+_LIB_FILES = {lib["file"]: name for name, lib in _LIBRARIES.items()}
+
+# Loads a library for the plugin's scripts: the plugin's local copy first, then the CDN.
+# window.__exhibitLoad(name, check) resolves with check() once it returns the library.
+_LIB_LOADER_SCRIPT = "<script>" + r"""(() => {
+  if (window.__exhibitLoad) return;
+  const LIBS = __LIBS__;
+  const m = /^(https?:\/\/(?:127\.0\.0\.1|localhost):\d+\/[^\/?#]+\/)(?:raw|preset)\//.exec(location.href);
+  const local = m ? m[1] + "lib/" : null;  // the plugin's server; null in an exported file
+  const loading = {};
+  const add = (src, check) => new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src;
+    s.onload = () => (check() ? resolve(check()) : reject(new Error("didn't load")));
+    s.onerror = () => { s.remove(); reject(new Error("couldn't be downloaded")); };
+    document.head.appendChild(s);
+  });
+  window.__exhibitLoad = (name, check) => {
+    if (check()) return Promise.resolve(check());
+    const lib = LIBS[name];
+    return loading[name] || (loading[name] = (local ? add(local + lib.file, check) : Promise.reject(null))
+      .catch(() => add(lib.cdn, check)));
+  };
+})();""".replace("__LIBS__", json.dumps({n: {"file": l["file"], "cdn": l["url"]} for n, l in _LIBRARIES.items()})) + "</script>"
+
+_lib_cache: dict[str, bytes] = {}
+_lib_fetch_started = False
+_lib_lock = threading.Lock()
+
+
+def _lib_dir() -> Path:
+    return _home() / "lib"
+
+
+def _lib_bytes(name: str) -> bytes | None:
+    """The local copy of a library, if it's there and matches its fingerprint."""
+    if name in _lib_cache:
+        return _lib_cache[name]
+    lib = _LIBRARIES[name]
+    try:
+        data = (_lib_dir() / lib["file"]).read_bytes()
+    except OSError:
+        return None
+    if hashlib.sha256(data).hexdigest() != lib["sha256"]:
+        return None
+    _lib_cache[name] = data
+    return data
+
+
+def _fetch_libraries() -> None:
+    """Download any library whose local copy is missing, checking each against its fingerprint."""
+    for name, lib in _LIBRARIES.items():
+        if _lib_bytes(name) is not None:
+            continue
+        try:
+            with urllib.request.urlopen(lib["url"], timeout=120) as r:
+                data = r.read(lib["size"] + 1)
+        except OSError:
+            continue  # no network now: pages use the CDN, and the next run tries again
+        if len(data) != lib["size"] or hashlib.sha256(data).hexdigest() != lib["sha256"]:
+            continue  # not the file we pinned: never keep it
+        try:
+            _lib_dir().mkdir(parents=True, exist_ok=True)
+            _atomic_write_bytes(_lib_dir() / lib["file"], data)
+        except OSError:
+            continue
+
+
+def _start_library_fetch() -> None:
+    """Fetch the libraries once per run, in the background (called on the tool's first use)."""
+    global _lib_fetch_started
+    if os.environ.get("EXHIBIT_NO_LIB_DOWNLOAD"):
+        return
+    with _lib_lock:
+        if _lib_fetch_started:
+            return
+        _lib_fetch_started = True
+    threading.Thread(target=_fetch_libraries, name="exhibit-libs", daemon=True).start()
+
 
 _BRIDGE_SCRIPT = """<script>(() => {
   let count = 0;
@@ -729,6 +943,13 @@ def _atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(data)
     os.replace(tmp, path)
 
 
@@ -1327,6 +1548,10 @@ class _Handler(BaseHTTPRequestHandler):
     def _origin(self) -> str:
         return f"http://127.0.0.1:{self.server.server_address[1]}"
 
+    def _page_csp(self) -> str:
+        port = self.server.server_address[1]
+        return _page_csp(f"http://127.0.0.1:{port} http://localhost:{port}")
+
     def _send(
         self, status: int, body: str | bytes, content_type: str, csp: str | None = None, cache: str = "no-store",
         headers: dict[str, str] | None = None,
@@ -1385,21 +1610,29 @@ class _Handler(BaseHTTPRequestHandler):
                     self._send(200, logo, "image/svg+xml", "default-src 'none'; style-src 'unsafe-inline'")
             elif parts == ["new"]:
                 self._new_page()
+            elif len(parts) == 2 and parts[0] == "lib" and parts[1] in _LIB_FILES:
+                data = _lib_bytes(_LIB_FILES[parts[1]])
+                if data is None:
+                    self._send(404, "Not found", "text/plain")  # the page falls back to the CDN
+                else:
+                    self._send(200, data, "text/javascript; charset=utf-8", cache="private, max-age=31536000, immutable",
+                               headers={"Cross-Origin-Resource-Policy": "cross-origin"})
             elif len(parts) == 2 and parts[0] == "preset" and parts[1] in ("document", "slides", "charts"):
                 page = (_PRESET_DIR / f"{parts[1]}.html").read_text(encoding="utf-8")
-                self._send(200, _inject_bridge(page, True), "text/html; charset=utf-8", _PAGE_CSP, cache="no-cache")
+                self._send(200, _inject_bridge(page, True), "text/html; charset=utf-8", self._page_csp(), cache="no-cache")
             elif len(parts) == 2 and parts[0] == "e":
                 version = query.get("v", [None])[0]
                 self._viewer(parts[1], int(version) if version and version.isdigit() else None)
             elif len(parts) == 3 and parts[0] == "raw" and parts[2].isdigit():
                 page, _ = _exhibit_html(parts[1], int(parts[2]))
                 thumbnail = query.get("thumb", [""])[0] == "1"
+                check = query.get("check", [""])[0] == "1"  # show's render check (_render_check)
                 # A version's file is written once and never changes (an edit adds a new version with
                 # a new address), so the browser can keep it: pages and thumbnails only fetch and
                 # re-run an exhibit again after it's edited. The address also carries the build (?b=),
                 # so a plugin update that changes the injected scripts gets fresh copies.
-                self._send(200, _inject_bridge(page, thumbnail), "text/html; charset=utf-8", _PAGE_CSP,
-                           cache="private, max-age=31536000, immutable")
+                self._send(200, _inject_bridge(page, thumbnail, check), "text/html; charset=utf-8", self._page_csp(),
+                           cache="no-store" if check else "private, max-age=31536000, immutable")
             elif len(parts) == 3 and parts[0] == "api" and parts[2] == "export":
                 if self._cross_site():
                     self._json(403, {"error": "Cross-site request refused."})
@@ -1664,7 +1897,7 @@ if (config.current !== null) {{
 <button class="bar-icon" id="export" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Export" title="Export">{_EXPORT_ICON}</button>
 <button class="bar-icon" id="copy-ref" type="button" aria-label="Copy reference" title="Copy reference (paste it into a WorkSwarm chat)">{_LINK_ICON}</button>
 <button class="bar-icon danger" id="delete-exhibit" type="button" aria-label="Delete exhibit" title="Delete">{_TRASH_ICON}</button></div></header>
-<div class="vbody"><iframe id="exhibit" title="{title}" sandbox="{_FRAME_SANDBOX}" src="{base}raw/{exhibit_id}/{chosen}?b={_BUILD}"></iframe>
+<div class="vbody"><iframe id="exhibit" title="{title}" sandbox="{_FRAME_SANDBOX}" src="{base}raw/{exhibit_id}/{chosen}?b={_page_version()}"></iframe>
 <div class="dp-resize" id="dp-resize" role="separator" aria-orientation="vertical" aria-label="Resize the Edit data panel" title="Drag to resize" tabindex="0" hidden></div>
 <aside class="data-panel" id="data-panel" aria-label="Edit data" hidden></aside></div></main>
 <button class="quote-btn" id="quote-btn" type="button" hidden>{_QUOTE_ICON}Quote</button>"""
@@ -1822,7 +2055,7 @@ window.addEventListener("message", async (event) => {{
                 thumb = f'<div class="thumb blank-thumb">{_kind_icon("freeform")}</div>'
             else:
                 thumb = (f'<div class="thumb"><iframe loading="lazy" tabindex="-1" aria-hidden="true" title="" scrolling="no" '
-                         f'sandbox="{_FRAME_SANDBOX}" src="{base}preset/{kind}?b={_BUILD}"></iframe></div>')
+                         f'sandbox="{_FRAME_SANDBOX}" src="{base}preset/{kind}?b={_page_version()}"></iframe></div>')
             cards.append(
                 f'<button class="card format-card" type="button" data-kind="{kind}">{thumb}'
                 f'<div class="card-body"><div class="card-head">{_kind_icon(kind)}<div class="card-title">'
@@ -1864,7 +2097,7 @@ document.querySelectorAll(".format-card").forEach((card) => card.addEventListene
             created = f'Created {html_lib.escape(_stamp(meta.get("created", "")))}'
             frame = (
                 f'<iframe loading="lazy" tabindex="-1" aria-hidden="true" title="" sandbox="{_FRAME_SANDBOX}"'
-                f' data-id="{exhibit_id}" src="{base}raw/{exhibit_id}/{len(meta["versions"])}?thumb=1&b={_BUILD}"></iframe>'
+                f' data-id="{exhibit_id}" src="{base}raw/{exhibit_id}/{len(meta["versions"])}?thumb=1&b={_page_version()}"></iframe>'
             )
             href = f"{base}e/{exhibit_id}"
             icon = _kind_icon(_exhibit_kind(meta))
@@ -2094,24 +2327,13 @@ _QUOTE_SCRIPT = """<script>(() => {
 # the plugin to any page that calls exhibit.chart( (and to its exports), like the slide navigation.
 # Chosen by the bake-off in notes/chart-bakeoff.md.
 _ECHARTS_URL = "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
-_CHART_KIT_SCRIPT = "<script>" + r"""(() => {
-  const ECHARTS_URL = "__ECHARTS_URL__";
+_CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
   const host = window.exhibit || (window.exhibit = {});
   const charts = new Set();
   const live = new WeakMap();  // element -> its latest call, so calling exhibit.chart again on it replaces the chart
   const numbers = new WeakMap();  // element -> its number, so an element without an id keeps its saved-data key
-  let loading = null;
-  const loadEcharts = () => {
-    if (window.echarts) return Promise.resolve(window.echarts);
-    if (!loading) loading = new Promise((resolve, reject) => {
-      const s = document.createElement("script");
-      s.src = ECHARTS_URL;
-      s.onload = () => (window.echarts ? resolve(window.echarts) : reject(new Error("ECharts didn't load")));
-      s.onerror = () => reject(new Error("ECharts couldn't be downloaded"));
-      document.head.appendChild(s);
-    });
-    return loading;
-  };
+  const loadEcharts = () => window.__exhibitLoad("echarts", () => window.echarts)
+    .catch(() => { throw new Error("ECharts couldn't be downloaded"); });
   const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
   const PALETTE = ["#4f7cff", "#f2994a", "#27ae60", "#eb5757", "#9b51e0", "#2d9cdb", "#d4a017", "#e05fa6", "#16a085", "#8d6e63"];
   const rgb = (color) => {  // any CSS colour -> [r, g, b], via the browser
@@ -2444,11 +2666,783 @@ _CHART_KIT_SCRIPT = "<script>" + r"""(() => {
   try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw); } catch (e) {}
   addEventListener("beforeprint", () => charts.forEach((c) => c.inst.resize()));
   addEventListener("afterprint", () => charts.forEach((c) => c.inst.resize()));
-})();""".replace("__ECHARTS_URL__", _ECHARTS_URL) + "</script>"
+})();""" + "</script>"
 
 
 def _uses_chart_kit(page: str) -> bool:
     return "exhibit.chart(" in page
+
+
+def _uses_diagram_kit(page: str) -> bool:
+    return _DIAGRAM_BLOCK.search(page) is not None
+
+
+def _diagram_look() -> str:
+    """'neo' (the default: neo look, ELK layout) or 'classic' (classic look, dagre layout). Hidden setting:
+    diagram_look in ui.json, or the EXHIBIT_DIAGRAM_LOOK environment variable (which wins)."""
+    look = os.environ.get("EXHIBIT_DIAGRAM_LOOK") or _load_ui().get("diagram_look")
+    return "classic" if look == "classic" else "neo"
+
+
+def _page_version() -> str:
+    """Goes in the address of every exhibit page: pages are cached for a year, so a new plugin build
+    or a different diagram look has to change the address."""
+    return f"{_BUILD}-{_diagram_look()}"
+
+
+def _diagram_kit_script() -> str:
+    look = _diagram_look()
+    return _DIAGRAM_KIT_SCRIPT.replace("__LOOK__", look).replace("__LAYOUT__", "elk" if look == "neo" else "dagre")
+
+
+# The diagram kit (0.4.0): every <pre class="exhibit-diagram"> holds Mermaid text, which is drawn with
+# Mermaid in the page's colours (light and dark), in one look for every exhibit (see _diagram_look).
+# The kit reads each block's HTML, so <br> line breaks in labels survive. Diagrams fit the width (no
+# sideways scrolling: a document's paper page would cut them off); wide ones get zoom buttons.
+# Interactions, so diagrams aren't static pictures (the user's call, 2026-11-11):
+#   - hover a box or arrow: it and its connections stay, the rest fades; click pins that, and shows
+#     the box's detail if the diagram has one (%% detail A: text);
+#   - step-through with Back / Play / Next and a caption: listed by the agent (%% step A, A->B: caption),
+#     or automatic for types with a natural order (sequence, timeline, Gantt, journey, gitGraph, event
+#     modeling); printed copies list the listed steps under the diagram;
+#   - exhibit.diagram("#id") for the page's own controls: highlight, goTo, on("click"/"step"), redraw.
+# Every Mermaid type is read into parts, links and groups by a small rule per type (Mermaid's own
+# classes and ids); links are matched to the parts at their two ends by position; anything unknown
+# falls back to "each group with a shape and a label". Checked on all 35 types (notes/mermaid-map.md).
+_DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
+  const LOOK = "__LOOK__", LAYOUT = "__LAYOUT__";
+  const host = window.exhibit || (window.exhibit = {});
+  const PARTS = ".ex-part";  // every element the kit recognised as a part, link or group (marked when the model is built)
+  // The Mermaid text is never shown, whatever the page's own CSS gives its block (Kit round 2: a
+  // min-height left a 280 px gap), so it's taken out of the layout entirely.
+  const css = "pre.exhibit-diagram{display:none!important}"
+    + ".exhibit-diagram-wrap{position:relative;margin:1.2em 0;break-inside:avoid}"
+    + ".exhibit-diagram-box{position:relative;width:100%;text-align:center}"
+    + ".exhibit-diagram-box svg{max-width:100%;height:auto}"
+    + ".exhibit-diagram-box.zoomed{overflow:auto;cursor:grab;text-align:left;max-height:80vh}"
+    + ".exhibit-diagram-box.zoomed svg{max-width:none}"
+    + ".exhibit-diagram-box.panning{cursor:grabbing;user-select:none}"
+    + ".exhibit-diagram-error{font-size:13px;color:#b42318;border:1px dashed currentColor;border-radius:8px;padding:10px 12px;text-align:left;white-space:pre-wrap}"
+    // Focus: everything else fades; what's in focus (hover, click, the current step) stays, and earlier steps stay half.
+    + ".exhibit-diagram-box svg :is(" + PARTS + "){transition:opacity .2s}"
+    + ".exhibit-diagram-box svg.ex-dim :is(" + PARTS + "){opacity:.18}"
+    + ".exhibit-diagram-box svg.ex-dim :is(" + PARTS + ").ex-done{opacity:.5}"
+    + ".exhibit-diagram-box svg.ex-dim :is(" + PARTS + ").ex-on{opacity:1}"
+    // Only while stepping or focusing (ex-dim): Mermaid's own rules are more specific, hence !important.
+    + ".exhibit-diagram-box svg.ex-dim :is(path,line).ex-link.ex-on{stroke:var(--ex-accent)!important;stroke-width:2.5px!important}"
+    + ".exhibit-diagram-box svg.ex-dim :is(rect,circle,ellipse,polygon).ex-node.ex-on,"
+    + ".exhibit-diagram-box svg.ex-dim g.ex-node.ex-on > :is(rect,circle,ellipse,polygon,path),"
+    + ".exhibit-diagram-box svg.ex-dim g.ex-node.ex-on > g > :is(rect,circle,ellipse,polygon,path)"
+    + "{stroke:var(--ex-accent)!important;stroke-width:2.5px!important}"
+    + ".exhibit-diagram-box svg .ex-hit{cursor:pointer}"
+    + ".exhibit-diagram-tools{position:absolute;top:4px;right:4px;display:flex;gap:2px;opacity:0;transition:opacity .15s;z-index:2}"
+    + ".exhibit-diagram-wrap:hover .exhibit-diagram-tools, .exhibit-diagram-tools:focus-within{opacity:1}"
+    + ".exhibit-diagram-wrap button{font:13px/1 system-ui,sans-serif;color:var(--fg,inherit);background:var(--card,Canvas);"
+    + "border:1px solid var(--line,rgba(128,128,128,.4));border-radius:7px;padding:6px 10px;cursor:pointer}"
+    + ".exhibit-diagram-wrap button:hover{border-color:var(--ex-accent)}"
+    + ".exhibit-diagram-wrap button:disabled{opacity:.45;cursor:default}"
+    + ".exhibit-diagram-tools button{padding:4px 8px;min-width:28px}"
+    + ".exhibit-diagram-steps{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;text-align:left}"
+    + ".exhibit-diagram-steps .count{font-size:12.5px;color:var(--muted,inherit);min-width:84px}"
+    + ".exhibit-diagram-steps .caption{flex:1 1 100%;margin:2px 0 0;font-size:14.5px;min-height:1.4em}"
+    + ".exhibit-diagram-detail{margin-top:10px;text-align:left;border:1px solid var(--line,rgba(128,128,128,.4));border-left:3px solid var(--ex-accent);"
+    + "border-radius:8px;padding:10px 12px;background:var(--card,transparent)}"
+    + ".exhibit-diagram-detail b{display:block;margin-bottom:3px}"
+    + ".exhibit-diagram-detail p{margin:0;white-space:pre-wrap}"
+    + ".exhibit-diagram-print{display:none}"
+    + "@media print{.exhibit-diagram-tools,.exhibit-diagram-steps,.exhibit-diagram-detail{display:none!important}"
+    + ".exhibit-diagram-box.zoomed{overflow:visible;max-height:none}.exhibit-diagram-box svg{max-width:100%!important;width:auto!important}"
+    + ".exhibit-diagram-box svg.ex-dim :is(" + PARTS + "){opacity:1!important}"
+    + ".exhibit-diagram-print{display:block;text-align:left;font-size:.92em;margin:.6em 0 0}}"
+    + "@media (prefers-reduced-motion: reduce){.exhibit-diagram-box svg :is(" + PARTS + "){transition:none}}";
+  const hex = (color) => {  // any CSS colour -> #rrggbb (Mermaid only takes hex)
+    const probe = document.createElement("i");
+    probe.style.color = color;
+    document.body.appendChild(probe);
+    const m = (getComputedStyle(probe).color.match(/[\d.]+/g) || [0, 0, 0]).slice(0, 3).map(Number);
+    probe.remove();
+    return "#" + m.map((v) => Math.round(v).toString(16).padStart(2, "0")).join("");
+  };
+  const light = (color) => { const c = hex(color); const n = parseInt(c.slice(1), 16);
+    return ((n >> 16) * 299 + ((n >> 8) & 255) * 587 + (n & 255) * 114) / 1000 > 140; };
+  const backdrop = (el) => {
+    for (let node = el; node && node.nodeType === 1; node = node.parentElement) {
+      const c = getComputedStyle(node).backgroundColor;
+      if (c && !/transparent|rgba\([^)]*,\s*0\)/.test(c)) return c;
+    }
+    return matchMedia("(prefers-color-scheme: dark)").matches ? "#1c1c1a" : "#ffffff";
+  };
+  const theme = (el) => {
+    const root = getComputedStyle(document.documentElement), body = getComputedStyle(document.body);
+    const v = (name) => root.getPropertyValue(name).trim();
+    const bg = hex(backdrop(el)), dark = !light(bg);
+    const fg = hex(v("--fg") || body.color || (dark ? "#ecece8" : "#1d1d1b"));
+    const muted = hex(v("--muted") || fg), line = hex(v("--line") || muted);
+    const accent = hex(v("--accent") || (dark ? "#8ab0ff" : "#2b59c3"));
+    const soft = hex(v("--accent-soft") || (dark ? "#1e2a45" : "#eaf0fc"));
+    const card = hex(v("--card") || v("--paper") || bg);
+    return {
+      accent, vars: {
+        darkMode: dark, background: bg, fontFamily: body.fontFamily, fontSize: "14px",
+        primaryColor: soft, primaryTextColor: fg, primaryBorderColor: accent, lineColor: muted,
+        secondaryColor: card, tertiaryColor: card, textColor: fg, noteBkgColor: card, noteTextColor: fg,
+        noteBorderColor: line, actorBkg: soft, actorBorder: accent, actorTextColor: fg, signalColor: fg,
+        signalTextColor: fg, labelBoxBkgColor: card, labelBoxBorderColor: line, labelTextColor: fg,
+        clusterBkg: card, clusterBorder: line, edgeLabelBackground: bg, titleColor: fg,
+      },
+    };
+  };
+  const dedent = (text) => {
+    const lines = text.replace(/\t/g, "  ").split("\n");
+    while (lines.length && !lines[0].trim()) lines.shift();
+    while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+    const indent = Math.min(...lines.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length));
+    return lines.map((l) => l.slice(indent)).join("\n");
+  };
+  const sourceOf = (pre) => {  // the Mermaid text, keeping <br> line breaks in labels
+    const copy = pre.cloneNode(true);
+    copy.querySelectorAll("br").forEach((br) => br.replaceWith("<br>"));
+    return dedent(copy.textContent);
+  };
+  // Steps and details live in the diagram as Mermaid comments, which Mermaid ignores:
+  //   %% step A, A->B: caption      (flowcharts, state, class and ER diagrams: the boxes and arrows of one step)
+  //   %% step: caption              (sequence diagrams and timelines: captions for the automatic steps, in order)
+  //   %% detail A: text             (shown when the user clicks box A)
+  //   %% steps: off                 (no step-through)
+  const extrasOf = (source) => {
+    const out = { steps: [], captions: [], details: {}, off: false };
+    for (const line of source.split("\n")) {
+      const m = line.match(/^\s*%%\s*(steps?|detail)\b\s*([^:]*?)\s*:\s*(.*?)\s*$/i);
+      if (!m) continue;
+      const kind = m[1].toLowerCase(), target = m[2], text = m[3];
+      if (kind === "steps" && /^off$/i.test(text)) out.off = true;
+      else if (kind === "detail" && target) out.details[target] = text;
+      else if (kind === "step" && target) out.steps.push({ targets: target.split(",").map((t) => t.trim()).filter(Boolean), caption: text });
+      else if (kind === "step") out.captions.push(text);
+    }
+    return out;
+  };
+  // The parts of a drawn diagram, for every Mermaid type: named parts (boxes, commits, tasks, fields...), links
+  // between them (arrows, lines), groups that contain parts (subgraphs, lanes, columns, branches), and an
+  // automatic step order for types that have one. Read from Mermaid's own classes and ids (Mermaid 12.3);
+  // see notes/mermaid-map.md. Anything unrecognised falls back to "each group with a shape and a label".
+  const at = (el, x, y) => { const m = el.getScreenCTM(); return { x: x * m.a + y * m.c + m.e, y: x * m.b + y * m.d + m.f }; };
+  const endsOf = (el) => {
+    try {
+      if (el.tagName === "line") return [at(el, el.x1.baseVal.value, el.y1.baseVal.value), at(el, el.x2.baseVal.value, el.y2.baseVal.value)];
+      const len = el.getTotalLength(), a = el.getPointAtLength(0), b = el.getPointAtLength(len);
+      return [at(el, a.x, a.y), at(el, b.x, b.y)];
+    } catch (e) { return null; }
+  };
+  const distance = (pt, r) => Math.hypot(Math.max(r.left - pt.x, 0, pt.x - r.right), Math.max(r.top - pt.y, 0, pt.y - r.bottom));
+  const centre = (r) => ({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+  const inside = (pt, r) => pt.x >= r.left && pt.x <= r.right && pt.y >= r.top && pt.y <= r.bottom;
+  const words = (el) => ((el && el.textContent) || "").replace(/\s+/g, " ").trim();
+  const ORDERED = { sequence: 1, timeline: 1, gantt: 1, journey: 1, gitgraph: 1, eventmodeling: 1 };
+
+  const modelOf = (d) => {
+    if (d.model) return d.model;
+    const svg = d.box.querySelector("svg");
+    if (!svg || !svg.getBoundingClientRect().width) return null;  // not on screen yet (a hidden slide)
+    const role = (svg.getAttribute("aria-roledescription") || "").toLowerCase();
+    const model = { svg, role, nodes: new Map(), edges: [], groups: [], auto: null, children: new Map(), owner: new WeakMap() };
+    const $ = (sel, root) => [...(root || svg).querySelectorAll(sel)];
+    const mark = (el, cls) => { el.classList.add("ex-part", cls); };
+    const add = (name, els, label) => {
+      els = els.filter(Boolean);
+      if (!name || !els.length) return null;
+      name = String(name);
+      if (!model.nodes.has(name)) model.nodes.set(name, { name, els: [], label: "" });
+      const n = model.nodes.get(name);
+      els.forEach((el, i) => { n.els.push(el); model.owner.set(el, { node: name }); mark(el, i ? "ex-label" : "ex-node"); el.classList.add("ex-hit"); });
+      if (!n.label) n.label = label || words(els.find((el) => words(el)) || els[0]);
+      return n;
+    };
+    const group = (name, els, label) => { const g = add(name, els, label); if (g && !g.group) { g.group = true; model.groups.push(g); } return g; };
+    const link = (els, from, to) => {
+      els = els.filter(Boolean);
+      const edge = { from, to, els };
+      model.edges.push(edge);
+      els.forEach((el, i) => { model.owner.set(el, { edge }); mark(el, i ? "ex-label" : "ex-link"); el.classList.add("ex-hit"); });
+      return edge;
+    };
+    const rectOf = (n) => n.els[0].getBoundingClientRect();
+    // Lines and arrows: each end goes to the nearest part that isn't a group.
+    const linkByPosition = (els) => {
+      const boxes = [...model.nodes.values()].filter((n) => !n.group).map((n) => ({ name: n.name, rect: rectOf(n) }));
+      const near = (pt) => boxes.reduce((best, b) => { const dist = distance(pt, b.rect); return dist < best.dist ? { name: b.name, dist } : best; },
+        { name: null, dist: Infinity }).name;
+      els.forEach((el) => {
+        const extra = Array.isArray(el) ? el.slice(1) : [];
+        const main = Array.isArray(el) ? el[0] : el;
+        const e = endsOf(main);
+        link([main, ...extra], e ? near(e[0]) : null, e ? near(e[1]) : null);
+      });
+    };
+    // Groups hold the parts whose centre is inside them (subgraphs, lanes, columns, domains).
+    const fillGroups = () => model.groups.forEach((g) => {
+      if (g.contains) return;
+      const r = rectOf(g);
+      g.contains = [...model.nodes.values()].filter((n) => !n.group && n !== g && inside(centre(rectOf(n)), r)).map((n) => n.name);
+    });
+    const order = (names, caption) => { model.auto = names.map((name) => ({ focus: { nodes: [name] }, caption: caption(model.nodes.get(name)) })); };
+    const byX = (names) => names.sort((a, b) => rectOf(model.nodes.get(a)).left - rectOf(model.nodes.get(b)).left);
+
+    if (role.startsWith("sequence")) {
+      $('[data-et="participant"][data-id], [data-et="life-line"][data-id]').forEach((el) => add(el.dataset.id, [el]));
+      // The bottom row of participant boxes is a loose rect and label: match them to participants by label.
+      const byLabel = new Map([...model.nodes.values()].map((n) => [n.label, n.name]));
+      $("text.actor").forEach((text) => {
+        if (text.closest('[data-et="participant"]')) return;
+        const name = byLabel.get(words(text));
+        const rect = text.previousElementSibling;
+        if (name) add(name, [text].concat(rect && rect.classList.contains("actor") ? [rect] : []));
+      });
+      const texts = $(".messageText");
+      $('[data-et="message"]').forEach((line, i) => { const e = link([line, texts[i]], line.dataset.from, line.dataset.to); e.text = words(texts[i]); });
+      model.auto = model.edges.map((e) => ({ focus: { nodes: [e.from, e.to], edges: [e] }, caption: e.from + " → " + e.to + ": " + e.text }));
+    } else if (role === "timeline") {
+      // One step per event, shown with its period: stepping by period hid the milestones when an agent
+      // grouped several under a period of its own (Kit round 1, prompt S: 6 milestones in 4 quarters).
+      const periods = [];
+      let current = null, key = null;
+      $("g.timeline-node").forEach((g) => {
+        const k = ((g.getAttribute("class") || "").match(/section-(-?\d+)/) || [])[1];
+        if (!current || key !== k) { key = k; current = add(words(g), [g]); if (current) { current.events = []; periods.push(current); } }
+        else if (current) { const ev = add(current.name + " · " + words(g), [g], words(g)); if (ev) current.events.push(ev); }
+      });
+      model.auto = periods.flatMap((p) => p.events.length
+        ? p.events.map((ev) => ({ focus: { nodes: [p.name, ev.name] }, caption: p.label + ": " + ev.label }))
+        : [{ focus: { nodes: [p.name] }, caption: p.label }]);
+    } else if (role === "gantt") {
+      $("rect.task[id]").forEach((r) => {
+        const id = r.id.startsWith(d.renderId + "-") ? r.id.slice(d.renderId.length + 1) : r.id;
+        add(id, [r, svg.getElementById(r.id + "-text")]);
+      });
+      order(byX([...model.nodes.keys()]), (n) => n.label);
+    } else if (role === "journey") {
+      const sections = [];
+      const once = (s) => (s.length % 2 === 0 && s.slice(0, s.length / 2) === s.slice(s.length / 2) ? s.slice(0, s.length / 2) : s);
+      $("rect.journey-section").forEach((r) => { const t = r.nextElementSibling, name = once(words(t)); sections.push(group("section: " + name, [r, t], name)); });
+      let task = null;
+      $("line.task-line, circle.face, path.mouth, rect.task, circle[class^=actor], text.task").forEach((el) => {
+        if (el.matches("line.task-line")) { task = [el]; return; }
+        if (!task) return;  // the legend's actor dots come before the first task
+        task.push(el);
+        if (el.matches("text.task")) {
+          const name = once(words(el));
+          add(name, [task.find((t) => t.matches("rect.task")) || el, ...task.filter((t) => !t.matches("rect.task"))], name);
+          task = null;
+        }
+      });
+      const tasks = [...model.nodes.values()].filter((n) => !n.group);
+      sections.filter(Boolean).forEach((s) => {
+        const r = rectOf(s);
+        s.contains = tasks.filter((t) => { const c = centre(rectOf(t)); return c.x >= r.left && c.x <= r.right; }).map((t) => t.name);
+      });
+      order(tasks.map((t) => t.name), (n) => { const s = sections.find((g) => g && g.contains.includes(n.name)); return (s ? s.label + ": " : "") + n.label; });
+    } else if (role === "gitgraph") {
+      const branchName = {};
+      $("g.branchLabel").forEach((g) => {
+        const label = g.querySelector('[class*="branch-label"]');
+        const i = (((label && label.getAttribute("class")) || "").match(/branch-label(\d+)/) || [])[1];
+        if (i === undefined) return;
+        branchName[i] = words(g);
+        group("branch: " + words(g), [$("line.branch.branch" + i)[0], g, $("rect.branchLabelBkg.label" + i)[0]], words(g));
+      });
+      // Commits: each circle in drawing order (a merge draws a second, inner circle: it joins its commit),
+      // with the label nearest to it. Custom commit ids end up in the circle's class, so names come from labels.
+      const labels = $("text.commit-label").map((t) => ({ t, c: centre(t.getBoundingClientRect()), used: false }));
+      const commits = [];
+      let last = null;
+      $("circle.commit").forEach((c, i) => {
+        if (c.classList.contains("commit-merge") && last) { add(last, [c]); return; }
+        const p = centre(c.getBoundingClientRect());
+        const near = labels.filter((l) => !l.used).reduce((best, l) => { const dist = Math.hypot(l.c.x - p.x, l.c.y - p.y); return dist < best.dist ? { l, dist } : best; },
+          { l: null, dist: 90 }).l;
+        if (near) near.used = true;
+        const text = near && near.t;
+        const label = text ? words(text) : "commit " + (commits.length + 1);
+        const name = model.nodes.has(label) ? label + " (" + (commits.length + 1) + ")" : label;
+        const bkg = text && text.previousElementSibling && text.previousElementSibling.matches("rect.commit-label-bkg") ? text.previousElementSibling : null;
+        const n = add(name, [c, text, bkg], label);
+        n.branch = [...c.classList].map((k) => (k.match(/^commit(\d+)$/) || [])[1]).filter((x) => x !== undefined).pop();
+        commits.push(name);
+        last = name;
+      });
+      model.groups.forEach((g) => { const i = Object.keys(branchName).find((k) => "branch: " + branchName[k] === g.name); g.contains = commits.filter((t) => model.nodes.get(t).branch === i); });
+      linkByPosition($("path.arrow"));
+      order(commits, (n) => "Commit " + n.label + (branchName[n.branch] ? " on " + branchName[n.branch] : ""));
+    } else if (role === "architecture") {
+      $("g.architecture-service[id]").forEach((g) => add(g.id.replace(d.renderId + "-", "").replace(/^service-/, ""), [g]));
+      $("[id*=group-]").filter((el) => el.matches("rect, g")).forEach((r) => group(r.id.replace(d.renderId + "-", "").replace(/^group-/, ""), [r]));
+      linkByPosition($("g.architecture-edges path"));
+    } else if (role === "packet") {
+      $("rect.packetBlock").forEach((r) => {
+        const els = [r];
+        for (let el = r.nextElementSibling; el && !el.matches("rect.packetBlock"); el = el.nextElementSibling) if (el.matches("text.packetLabel, text.packetByte")) els.push(el);
+        add(words(els.find((el) => el.matches(".packetLabel"))) || "field", els);
+      });
+    } else if (role === "treeview") {
+      const items = $("text.treeView-node-label").map((t) => add(words(t), [t]));
+      items.forEach((n, i) => {  // a folder holds the items indented under it
+        if (!n) return;
+        const x = rectOf(n).left, kids = [];
+        for (let j = i + 1; j < items.length && items[j] && rectOf(items[j]).left > x + 2; j++) kids.push(items[j].name);
+        if (kids.length) model.children.set(n.name, kids);
+      });
+    } else if (role === "venn") {
+      $("g.venn-area").forEach((g) => add(words(g.querySelector("text")) || words(g), [g]));
+    } else if (role === "ishikawa") {
+      const head = $("g.ishikawa-head-group")[0];
+      if (head) add(words(head), [head]);
+      $("g.ishikawa-pair").forEach((pair) => {
+        const cat = pair.querySelector("g.ishikawa-label-group");
+        const causes = [...pair.querySelectorAll("g.ishikawa-sub-group")].map((g) => add(words(g), [g]));
+        const g = cat && group(words(cat), [cat, pair.querySelector("line.ishikawa-branch")]);
+        if (g) g.contains = causes.filter(Boolean).map((c) => c.name);
+      });
+    } else if (role === "wardley") {
+      $("g.wardley-node").forEach((g) => add(words(g), [g]));
+      linkByPosition($("line.wardley-link, line.wardley-trend"));
+    } else if (role === "eventmodeling") {
+      $("g.em-box").forEach((g) => add(words(g), [g]));
+      $("g.em-swimlane").forEach((g) => group("lane: " + words(g), [g], words(g)));
+      linkByPosition($("path.em-relation"));
+      fillGroups();
+      order(byX([...model.nodes.values()].filter((n) => !n.group).map((n) => n.name)), (n) => n.label);
+    } else if (role === "cynefin") {
+      $("rect.cynefinItem").forEach((r) => add(words(r.nextElementSibling), [r, r.nextElementSibling]));
+      const labels = $("text.cynefinDomainLabel");
+      $("rect.cynefinDomain").forEach((r) => {
+        const box = r.getBoundingClientRect();
+        const label = labels.find((t) => inside(centre(t.getBoundingClientRect()), box));
+        group(words(label) || "domain", [r, label]);
+      });
+    } else if (role.startsWith("railroad")) {
+      $("g.railroad-terminal, g.railroad-nonterminal").forEach((g) => add(words(g), [g]));
+      $("g.railroad-rule").forEach((g) => group(words(g.querySelector(".railroad-rule-name")) || "rule", [g]));
+    } else if (svg.querySelector("g.node, g.architecture-service")) {
+      // Flowchart, state, class, ER, requirement, mind map, block, kanban, swimlane, use case, agentflow, C4.
+      const prefix = d.renderId + "-";
+      $("g.node[id], g.cluster[id]").forEach((g) => {
+        const id = (g.id.startsWith(prefix) ? g.id.slice(prefix.length) : g.id).replace(/^(flowchart|state|classId|entity|usecase|agentflow)-/, "").replace(/-\d+$/, "");
+        if (g.classList.contains("cluster")) group(id, [g]); else add(id, [g]);
+      });
+      const mind = role === "mindmap";
+      $("path[data-edge]").forEach((path) => {
+        const id = path.dataset.id || "";
+        const inner = id ? svg.querySelector('.edgeLabel [data-id="' + CSS.escape(id) + '"]') : null;
+        const els = [path, inner && inner.closest(".edgeLabel")];
+        const tree = mind && id.match(/^edge_(\d+)_(\d+)$/);  // a mind map's branches: parent -> child
+        if (tree) link(els, "node_" + tree[1], "node_" + tree[2]);
+        else linkByPosition([els]);
+      });
+      if (mind) model.edges.forEach((e) => model.children.set(e.from, (model.children.get(e.from) || []).concat(e.to)));
+      if (role === "c4") linkByPosition($("line, path").filter((el) => !el.closest("g.node, defs, marker") && !el.classList.contains("ex-part")));
+    } else {
+      // Anything else: each innermost group with both a shape and a label is a part, in drawing order.
+      const leaves = $("g").filter((g) => g.querySelector("rect, circle, ellipse, polygon, path") && words(g)
+        && ![...g.querySelectorAll("g")].some((inner) => inner.querySelector("rect, circle, ellipse, polygon, path") && words(inner)));
+      leaves.forEach((g) => add(words(g), [g]));
+    }
+    fillGroups();
+    d.model = model;
+    return model;
+  };
+
+  // Highlighting: a set of parts and links; the rest fades.
+  const partsOf = (model, focus) => {
+    const els = [];
+    (focus.nodes || []).forEach((name) => { const n = model.nodes.get(name); if (n) els.push(...n.els); });
+    (focus.edges || []).forEach((e) => els.push(...e.els));
+    return els;
+  };
+  const paint = (d, on, done) => {
+    const model = modelOf(d);
+    if (!model) return;
+    model.svg.querySelectorAll(".ex-on, .ex-done").forEach((el) => el.classList.remove("ex-on", "ex-done"));
+    if (!on) { model.svg.classList.remove("ex-dim"); return; }
+    model.svg.classList.add("ex-dim");
+    (done || []).forEach((el) => el.classList.add("ex-done"));
+    on.forEach((el) => { el.classList.remove("ex-done"); el.classList.add("ex-on"); });
+  };
+  const descendants = (model, name, seen = new Set()) => {
+    (model.children.get(name) || []).forEach((k) => { if (!seen.has(k)) { seen.add(k); descendants(model, k, seen); } });
+    return [...seen];
+  };
+  const around = (model, owner) => {  // what lights up for a hovered or clicked part
+    if (owner.edge) return { nodes: [owner.edge.from, owner.edge.to], edges: [owner.edge] };
+    if (!owner.node) return {};
+    const n = model.nodes.get(owner.node);
+    if (n && n.group) {  // a group: everything in it, and the links between those parts
+      const names = new Set([n.name, ...(n.contains || [])]);
+      return { nodes: [...names], edges: model.edges.filter((e) => names.has(e.from) && names.has(e.to)) };
+    }
+    const below = descendants(model, owner.node);
+    if (below.length) {  // a branch of a tree (mind map, folder): it and everything under it
+      const names = new Set([owner.node, ...below]);
+      return { nodes: [...names], edges: model.edges.filter((e) => names.has(e.from) && names.has(e.to)) };
+    }
+    const edges = model.edges.filter((e) => e.from === owner.node || e.to === owner.node);
+    return { nodes: [owner.node, ...edges.flatMap((e) => [e.from, e.to])], edges };
+  };
+  // Targets in a step or in highlight(): a part's id or its label (any case), and arrows written A->B.
+  const nameOf = (model, t) => {
+    if (model.nodes.has(t)) return t;
+    const want = t.toLowerCase();
+    for (const n of model.nodes.values()) if (n.label.toLowerCase() === want || n.name.toLowerCase() === want) return n.name;
+    return t;
+  };
+  const resolve = (model, targets) => {
+    const focus = { nodes: [], edges: [] };
+    for (const t of targets) {
+      const arrow = t.split(/\s*-+>?\s*|\s*<-+\s*/).filter(Boolean);
+      if (arrow.length === 2 && /-/.test(t) && !model.nodes.has(t)) {
+        const [a, b] = arrow.map((x) => nameOf(model, x));
+        model.edges.filter((e) => (e.from === a && e.to === b) || (e.from === b && e.to === a))
+          .forEach((e) => { focus.edges.push(e); focus.nodes.push(a, b); });
+      } else focus.nodes.push(nameOf(model, t));
+    }
+    return focus;
+  };
+
+  // Steps: listed in the diagram, or automatic for types with a natural order (sequence, timeline, Gantt,
+  // journey, gitGraph, event modeling). On those, %% step: caption lines only replace the captions.
+  const stepsOf = (d) => {
+    const model = modelOf(d);
+    if (!model || d.extras.off || d.pre.dataset.steps === "off") return [];
+    const ordered = model.auto && model.auto.length >= 2 && ORDERED[model.role.replace(/^sequence.*/, "sequence")];
+    if (d.extras.steps.length && !ordered)
+      return d.extras.steps.map((s) => ({ focus: resolve(model, s.targets), caption: s.caption }));
+    // On ordered types every step line is a caption, in order, however the agent wrote it
+    // ("%% step: text", "%% step 1: text", "%% step A->B: text"); Kit round 2 lost "%% step 1:" captions.
+    const captions = d.extras.captions.length ? d.extras.captions : d.extras.steps.map((s) => s.caption);
+    if (ordered) return model.auto.map((s, i) => ({ focus: s.focus, caption: captions[i] || s.caption }));
+    return [];
+  };
+  // Bring what a step lights up into view, with the step controls too when both fit (Kit round 3: on a
+  // tall diagram the lit box was above the screen while the user was at the controls below it). A
+  // stand-in box over that area is scrolled into view, so the window and any scrolling slide or zoomed
+  // diagram around it all move as needed.
+  const areaOf = (parts) => {
+    const rects = parts.map((el) => el.getBoundingClientRect()).filter((r) => r.width || r.height);
+    return rects.length ? { top: Math.min(...rects.map((r) => r.top)), bottom: Math.max(...rects.map((r) => r.bottom)),
+                            left: Math.min(...rects.map((r) => r.left)), right: Math.max(...rects.map((r) => r.right)) } : null;
+  };
+  const reveal = (d, parts) => {
+    let area = areaOf(parts);
+    if (!area) return;
+    if (d.box.classList.contains("zoomed")) {  // first inside the diagram's own scroll area, centring the lit parts
+      const b = d.box.getBoundingClientRect();
+      if (area.left < b.left || area.right > b.right) d.box.scrollLeft += (area.left + area.right - b.left - b.right) / 2;
+      if (area.top < b.top || area.bottom > b.bottom) d.box.scrollTop += (area.top + area.bottom - b.top - b.bottom) / 2;
+      area = areaOf(parts);
+    }
+    const controls = d.stepUi && d.stepUi.root.getBoundingClientRect();
+    const view = window.innerHeight || document.documentElement.clientHeight;
+    const withControls = controls && Math.max(area.bottom, controls.bottom) - area.top <= view * 0.9;
+    const bottom = withControls ? Math.max(area.bottom, controls.bottom) : area.bottom;
+    const w = d.wrap.getBoundingClientRect();
+    const mark = document.createElement("div");
+    mark.style.cssText = "position:absolute;pointer-events:none;visibility:hidden;left:0;width:1px;"
+      + "top:" + (area.top - w.top) + "px;height:" + Math.max(1, bottom - area.top) + "px";
+    d.wrap.appendChild(mark);
+    const still = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    mark.scrollIntoView({ block: "nearest", inline: "nearest", behavior: still ? "auto" : "smooth" });
+    setTimeout(() => mark.remove(), 1500);  // kept until a smooth scroll has finished
+  };
+  const showStep = (d, index, show) => {
+    const steps = d.steps || [];
+    if (index > 0) { d.pinned = null; if (d.detail) { d.detail.remove(); d.detail = null; } }
+    d.step = Math.max(0, Math.min(index, steps.length));
+    const ui = d.stepUi;
+    if (d.step === 0) paint(d, null);
+    else {
+      const model = modelOf(d);
+      const done = steps.slice(0, d.step - 1).flatMap((s) => partsOf(model, s.focus));
+      const on = partsOf(model, steps[d.step - 1].focus);
+      paint(d, on, done);
+      if (show) reveal(d, on);
+    }
+    if (ui) {
+      ui.count.textContent = d.step ? "Step " + d.step + " of " + steps.length : steps.length + " steps";
+      ui.caption.textContent = d.step ? steps[d.step - 1].caption : "Press Next or Play to go through it step by step.";
+      ui.back.disabled = d.step === 0;
+      ui.next.disabled = d.step === steps.length;
+    }
+    emit(d, "step", d.step);
+  };
+  const stopPlay = (d) => { clearInterval(d.timer); d.timer = 0; if (d.stepUi) d.stepUi.play.textContent = "▶ Play"; };
+  const buildSteps = (d) => {
+    if (d.stepUi) { d.stepUi.root.remove(); d.stepUi = null; }
+    if (d.printList) { d.printList.remove(); d.printList = null; }
+    stopPlay(d);
+    d.steps = stepsOf(d);
+    if (!d.steps.length) return;
+    const root = document.createElement("div");
+    root.className = "exhibit-diagram-steps";
+    const button = (text, label, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = text;
+      b.setAttribute("aria-label", label); b.addEventListener("click", fn); root.appendChild(b); return b; };
+    const ui = { root };
+    ui.back = button("‹ Back", "Previous step", () => { stopPlay(d); showStep(d, d.step - 1, true); });
+    ui.play = button("▶ Play", "Play the steps", () => {
+      if (d.timer) { stopPlay(d); return; }
+      if (d.step >= d.steps.length) showStep(d, 0);
+      ui.play.textContent = "⏸ Pause";
+      showStep(d, d.step + 1, true);
+      d.timer = setInterval(() => { if (d.step >= d.steps.length) stopPlay(d); else showStep(d, d.step + 1, true); }, 2200);
+    });
+    ui.next = button("Next ›", "Next step", () => { stopPlay(d); showStep(d, d.step + 1, true); });
+    ui.count = document.createElement("span"); ui.count.className = "count"; root.appendChild(ui.count);
+    ui.caption = document.createElement("p"); ui.caption.className = "caption"; ui.caption.setAttribute("aria-live", "polite"); root.appendChild(ui.caption);
+    d.stepUi = ui;
+    d.wrap.appendChild(root);
+    if (d.extras.steps.length) {  // printed and PDF copies list the steps under the diagram
+      const list = document.createElement("ol");
+      list.className = "exhibit-diagram-print";
+      d.steps.forEach((s) => { const li = document.createElement("li"); li.textContent = s.caption; list.appendChild(li); });
+      d.wrap.appendChild(list);
+      d.printList = list;
+    }
+    showStep(d, Math.min(d.step || 0, d.steps.length));
+  };
+
+  // Details on click.
+  const showDetail = (d, name) => {
+    if (d.detail) { d.detail.remove(); d.detail = null; }
+    const text = name && d.extras.details[name];
+    if (!text) return;
+    const n = modelOf(d) && modelOf(d).nodes.get(name);
+    const panel = document.createElement("div");
+    panel.className = "exhibit-diagram-detail";
+    panel.setAttribute("role", "note");
+    const title = document.createElement("b"); title.textContent = (n && n.label) || name;
+    const body = document.createElement("p"); body.textContent = text;
+    panel.append(title, body);
+    d.wrap.insertBefore(panel, d.stepUi ? d.stepUi.root : null);
+    d.detail = panel;
+  };
+
+  // Zoom: only offered when the diagram is drawn noticeably smaller than its natural size.
+  // A wide diagram is never shrunk until its text is unreadable (Kit round 3: a timeline fitted to the
+  // column drew 14 px labels at 7.5 px). It starts at the smallest size whose text is MIN_TEXT px and
+  // scrolls sideways; Zoom out still fits the whole width. Printed copies always fit the width.
+  const MIN_TEXT = 11;
+  const textSize = (svg) => {  // the diagram's usual label size, in its own units
+    const sizes = [...svg.querySelectorAll("text, foreignObject span, foreignObject div")]
+      .filter((el) => el.textContent.trim() && !el.querySelector("span, div"))
+      .map((el) => parseFloat(getComputedStyle(el).fontSize)).filter((v) => v > 0).sort((a, b) => a - b);
+    return sizes.length ? sizes[sizes.length >> 1] : 0;
+  };
+  const buildZoom = (d) => {
+    const svg = d.box.querySelector("svg");
+    if (d.tools) { d.tools.remove(); d.tools = null; }
+    d.box.classList.remove("zoomed");
+    if (!svg) return;
+    svg.style.width = "";
+    const natural = (svg.viewBox && svg.viewBox.baseVal && svg.viewBox.baseVal.width) || parseFloat(svg.style.maxWidth) || 0;
+    const room = d.box.clientWidth;
+    if (!natural || !room || natural <= room * 1.15) return;
+    const fit = room / natural, font = textSize(svg);
+    const readable = font ? Math.min(1, MIN_TEXT / font) : 0;
+    // 0 = fit the width; a readable size in between when fitting would make the text too small.
+    const levels = [0, ...(readable > fit * 1.05 && readable < 1 ? [readable] : []), 1, 1.5, 2];
+    let level = readable > fit * 1.05 ? 1 : 0;
+    const apply = () => {
+      d.box.classList.toggle("zoomed", level > 0);
+      svg.style.width = level ? Math.round(natural * levels[level]) + "px" : "";
+      out.disabled = level === 0; inn.disabled = level === levels.length - 1;
+    };
+    const tools = document.createElement("div");
+    tools.className = "exhibit-diagram-tools";
+    const mk = (text, label, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = text;
+      b.setAttribute("aria-label", label); b.title = label; b.addEventListener("click", fn); tools.appendChild(b); return b; };
+    const out = mk("−", "Zoom out", () => { level = Math.max(0, level - 1); apply(); });
+    const inn = mk("+", "Zoom in", () => { level = Math.min(levels.length - 1, level + 1); apply(); });
+    d.wrap.insertBefore(tools, d.box);
+    d.wrap.style.position = "relative";
+    d.tools = tools;
+    apply();
+  };
+
+  // Events for exhibit.diagram(...).on(...)
+  const emit = (d, event, value) => (d.listeners[event] || []).forEach((fn) => { try { fn(value); } catch (err) { console.error("exhibit.diagram:", err); } });
+
+  const wire = (d) => {
+    const svg = d.box.querySelector("svg");
+    if (!svg) return;
+    const ownerOf = (target) => {
+      const model = modelOf(d);
+      if (!model) return null;
+      for (let el = target; el && el !== svg; el = el.parentNode) { const o = model.owner.get(el); if (o) return o; }
+      return null;
+    };
+    svg.addEventListener("pointerover", (e) => {
+      if (d.pinned || d.step || d.panning) return;
+      const o = ownerOf(e.target);
+      const model = modelOf(d);
+      if (o && model) paint(d, partsOf(model, around(model, o)));
+    });
+    svg.addEventListener("pointerleave", () => { if (!d.pinned && !d.step) paint(d, null); });
+    svg.addEventListener("click", (e) => {
+      if (d.moved) return;
+      const o = ownerOf(e.target);
+      const model = modelOf(d);
+      if (!o || !model) { d.pinned = null; showDetail(d, null); if (d.step) showStep(d, d.step); else paint(d, null); return; }
+      if (d.step) { stopPlay(d); d.step = 0; showStep(d, 0); }
+      const key = o.node || o.edge;
+      d.pinned = d.pinned === key ? null : key;
+      paint(d, d.pinned ? partsOf(model, around(model, o)) : null);
+      showDetail(d, d.pinned && o.node);
+      if (o.node) emit(d, "click", o.node);
+    });
+    // Drag to move around a zoomed-in diagram.
+    d.box.addEventListener("pointerdown", (e) => {
+      if (!d.box.classList.contains("zoomed") || e.button !== 0) return;
+      const start = { x: e.clientX, y: e.clientY, left: d.box.scrollLeft, top: d.box.scrollTop };
+      d.moved = false;
+      const move = (ev) => {
+        const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
+        if (!d.panning && Math.hypot(dx, dy) < 4) return;
+        d.panning = d.moved = true;
+        d.box.classList.add("panning");
+        d.box.scrollLeft = start.left - dx; d.box.scrollTop = start.top - dy;
+      };
+      const up = () => {
+        removeEventListener("pointermove", move); removeEventListener("pointerup", up);
+        d.box.classList.remove("panning");
+        setTimeout(() => { d.panning = false; d.moved = false; }, 0);
+      };
+      addEventListener("pointermove", move); addEventListener("pointerup", up);
+    });
+  };
+
+  let diagrams = null, renders = 0, mermaidReady = null;
+  const collect = () => {
+    if (diagrams) return diagrams;
+    const style = document.createElement("style");
+    style.textContent = css;
+    document.head.appendChild(style);
+    diagrams = [...document.querySelectorAll("pre.exhibit-diagram")].map((pre, i) => {
+      const wrap = document.createElement("div");
+      wrap.className = "exhibit-diagram-wrap";
+      const box = document.createElement("div");
+      box.className = "exhibit-diagram-box";
+      box.setAttribute("role", "img");
+      box.setAttribute("aria-label", pre.dataset.name || pre.getAttribute("title") || "Diagram " + (i + 1));
+      wrap.appendChild(box);
+      pre.after(wrap);
+      const source = sourceOf(pre);
+      const d = { pre, wrap, box, source, extras: extrasOf(source), listeners: {}, step: 0 };
+      d.ready = new Promise((resolve) => { d.resolveReady = resolve; });
+      return d;
+    });
+    return diagrams;
+  };
+  const fail = (d, text) => {
+    d.wrap.dataset.state = "failed";  // read by show's render check
+    d.box.innerHTML = "";
+    const note = document.createElement("div");
+    note.className = "exhibit-diagram-error";
+    note.textContent = text;
+    d.box.appendChild(note);
+  };
+  const setup = async (list) => {
+    const mermaid = await window.__exhibitLoad("mermaid", () => window.mermaid);
+    try { if (document.fonts && document.fonts.ready) await document.fonts.ready; } catch (e) {}
+    const t = theme(list[0].box);
+    mermaid.initialize({
+      startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true, deterministicIds: true,
+      // Mermaid 12 already lays out with ELK where it can; forcing it breaks mind maps, so neo leaves it unset.
+      theme: "base", look: LOOK, ...(LAYOUT === "elk" ? {} : { layout: LAYOUT }), themeVariables: t.vars, fontFamily: t.vars.fontFamily,
+      // A diagram's own settings can't change the look, so every exhibit stays the same.
+      secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "maxEdges",
+               "theme", "themeVariables", "themeCSS", "look", "layout", "fontFamily", "darkMode"],
+    });
+    list.forEach((d) => d.wrap.style.setProperty("--ex-accent", t.accent));
+    return mermaid;
+  };
+  const render = async (mermaid, d) => {
+    d.model = null; d.pinned = null;
+    if (d.detail) { d.detail.remove(); d.detail = null; }
+    try {
+      d.renderId = "exhibit-diagram-" + (++renders);
+      const { svg } = await mermaid.render(d.renderId, d.source);
+      d.box.innerHTML = svg;
+      d.wrap.dataset.state = "drawn";
+      const el = d.box.querySelector("svg");
+      if (el) el.setAttribute("aria-hidden", "true");  // the box carries the name
+      wire(d);
+      buildZoom(d);
+      buildSteps(d);
+      // A diagram that isn't on screen yet (a later slide) can't be measured: finish when it shows.
+      if (!modelOf(d) && window.IntersectionObserver) {
+        const watch = new IntersectionObserver((entries) => {
+          if (!entries.some((e) => e.isIntersecting) || !modelOf(d)) return;
+          watch.disconnect();
+          buildZoom(d); buildSteps(d);
+        });
+        watch.observe(d.box);
+      }
+    } catch (err) {
+      if (d.stepUi) { d.stepUi.root.remove(); d.stepUi = null; }
+      const message = String((err && err.message) || err).split("\n").slice(0, 4).join("\n");
+      fail(d, "This diagram couldn't be drawn:\n" + message);
+      console.error("exhibit-diagram:", err);
+    }
+    d.resolveReady();
+  };
+  const draw = async () => {
+    const list = collect();
+    if (!list.length) return;
+    let mermaid;
+    try { mermaid = await (mermaidReady = setup(list)); }
+    catch (err) { list.forEach((d) => { fail(d, "This diagram couldn't be drawn: Mermaid couldn't be downloaded."); d.resolveReady(); }); return; }
+    for (const d of list) await render(mermaid, d);
+  };
+
+  // exhibit.diagram("#id") -> a handle for the page's own controls (sliders, quizzes, custom steppers).
+  host.diagram = (target) => {
+    const el = typeof target === "string" ? document.querySelector(target) : target;
+    const d = (diagrams || collect()).find((x) => x.pre === el || x.wrap === el || x.box === el);
+    if (!d) { console.error("exhibit.diagram: no exhibit-diagram block matches " + target); return Promise.resolve(null); }
+    return d.ready.then(() => ({
+      get nodes() { const m = modelOf(d); return m ? [...m.nodes.keys()] : []; },
+      get steps() { return (d.steps || []).length; },
+      get step() { return d.step || 0; },
+      highlight(targets, caption) {
+        const m = modelOf(d);
+        if (!m) return;
+        stopPlay(d);
+        d.step = 0;
+        const list = Array.isArray(targets) ? targets : [targets];
+        paint(d, list.length ? partsOf(m, resolve(m, list)) : null);
+        d.pinned = list.length ? "api" : null;
+        if (caption !== undefined && d.stepUi) d.stepUi.caption.textContent = caption;
+      },
+      clear() { d.pinned = null; showDetail(d, null); showStep(d, 0); },
+      goTo(n) { stopPlay(d); d.pinned = null; showStep(d, n, true); },
+      on(event, fn) { (d.listeners[event] = d.listeners[event] || []).push(fn); return this; },
+      redraw(text) {
+        d.source = dedent(String(text));
+        d.extras = extrasOf(d.source);
+        d.step = 0;
+        return (mermaidReady || Promise.reject(new Error("Mermaid isn't loaded"))).then((m) => render(m, d));
+      },
+    }));
+  };
+
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", draw); else draw();
+  // Light/dark switches redraw in the new colours, keeping the current step.
+  try {
+    matchMedia("(prefers-color-scheme: dark)").addEventListener("change", async () => {
+      if (!diagrams || !diagrams.length || !mermaidReady) return;
+      const mermaid = await (mermaidReady = setup(diagrams));
+      for (const d of diagrams) { const step = d.step; await render(mermaid, d); if (step) showStep(d, step); }
+    });
+  } catch (e) {}
+})();""" + "</script>"
 
 
 # In an exported file there's no viewer to talk to: window.exhibit works on a copy of the saved data
@@ -2953,6 +3947,140 @@ def _export_pdf(exhibit_id: str, version: int | None) -> tuple[str, bytes]:
         else:
             raise _ToolFailure("pdf_failed", "The browser didn't produce a PDF in time.")
     return name[: -len(".html")] + ".pdf", pdf
+
+
+# Render check (0.4.0, after Kit round 2, 2026-11-11): show used to return success for pages whose
+# diagram never drew, because drawing happens later, in the user's browser. Now show opens the saved
+# page in a headless browser (the one PDF export uses) and reads back what happened, for every page:
+# diagrams that failed (with Mermaid's own message) or came out empty, script errors and console.error
+# messages (the chart kit and agents' own code report failures there), and the visible text, so the
+# agent can see what the user will see. One general check instead of a rule per diagram type or trap.
+# EXHIBIT_NO_RENDER_CHECK=1, or "render_check": false in ui.json, turns it off.
+_CHECK_TIMEOUT = 30
+_CHECK_TEXT_LIMIT = 1500
+_CHECK_SCRIPT = "<script>" + r"""(() => {
+  const errors = [];
+  const add = (text) => {
+    text = String(text || "").replace(/\s+/g, " ").trim().slice(0, 300);
+    if (text && errors.length < 10 && !errors.includes(text)) errors.push(text);
+  };
+  const say = (v) => (v && v.message ? v.message : typeof v === "object" ? (() => { try { return JSON.stringify(v); } catch (e) { return String(v); } })() : String(v));
+  addEventListener("error", (e) => {
+    const t = e.target;
+    if (t && t !== window && (t.tagName === "SCRIPT" || t.tagName === "LINK")) add("Couldn't load " + (t.src || t.href));
+    else if (e.message) add(e.message + (e.lineno ? " (line " + e.lineno + ")" : ""));
+  }, true);
+  addEventListener("unhandledrejection", (e) => add("Unhandled promise rejection: " + say(e.reason)));
+  const original = console.error;
+  console.error = function (...args) {
+    // The diagram kit logs each failed diagram too; those are reported from the diagram itself.
+    if (!/^exhibit-diagram:/.test(String(args[0]))) add(args.map(say).join(" "));
+    return original.apply(this, args);
+  };
+  const write = () => {
+    const diagrams = [...document.querySelectorAll(".exhibit-diagram-wrap")].map((w) => {
+      const error = w.querySelector(".exhibit-diagram-error");
+      if (error) return { state: "failed", error: error.textContent.replace(/^This diagram couldn't be drawn:\s*/, "").slice(0, 400) };
+      return { state: w.querySelector("svg") ? "drawn" : "empty" };
+    });
+    // Drawings whose text is too small to read at this window size: kit diagrams and the page's own SVGs.
+    const wraps = [...document.querySelectorAll(".exhibit-diagram-wrap")];  // numbered as in "diagrams"
+    const small = [];
+    let own = 0;
+    document.querySelectorAll("svg").forEach((svg) => {
+      if (svg.parentElement && svg.parentElement.closest("svg")) return;
+      const r = svg.getBoundingClientRect();
+      const sizes = [];
+      svg.querySelectorAll("text, foreignObject").forEach((el) => {
+        const leaf = el.tagName.toLowerCase() === "foreignobject"  // HTML labels: the innermost elements with text
+          ? [...el.querySelectorAll("*")].filter((x) => !x.children.length && x.textContent.trim())
+          : (el.textContent.trim() ? [el] : []);
+        const ctm = el.getScreenCTM && el.getScreenCTM();  // how much the drawing is scaled on screen
+        if (!ctm || !leaf.length) return;
+        const scale = Math.hypot(ctm.a, ctm.b);
+        leaf.forEach((x) => { const b = x.getBoundingClientRect(); if (b.width && b.height) sizes.push(parseFloat(getComputedStyle(x).fontSize) * scale); });
+      });
+      if (!r.width || !r.height || sizes.length < 2) return;
+      const k = wraps.findIndex((w) => w.contains(svg));
+      if (k < 0) own += 1;
+      sizes.sort((x, y) => x - y);
+      const px = sizes[sizes.length >> 1];
+      if (px < 10) small.push({ name: k >= 0 ? "Diagram " + (k + 1) : "Drawing " + own + " (it starts “" + [...svg.querySelectorAll("text, foreignObject")].map((x) => x.textContent.trim()).filter(Boolean).join(" ").slice(0, 40) + "”)", px: Math.round(px * 10) / 10 });
+    });
+    const report = { errors, diagrams, small, text: document.body ? document.body.innerText : "" };
+    let el = document.getElementById("exhibit-check");
+    if (!el) {
+      el = document.createElement("script");
+      el.id = "exhibit-check";
+      el.type = "application/json";
+      document.documentElement.appendChild(el);
+    }
+    el.textContent = JSON.stringify(report).replace(/</g, "\\u003c");
+  };
+  addEventListener("load", () => { write(); setTimeout(write, 2000); setTimeout(write, 4500); });
+})();""" + "</script>"
+
+
+def _render_check_enabled() -> bool:
+    return not os.environ.get("EXHIBIT_NO_RENDER_CHECK") and _load_ui().get("render_check", True) is not False
+
+
+def _render_check(exhibit_id: str, version: int) -> dict | None:
+    """What the saved page does once drawn, from a headless browser: {"errors", "diagrams", "text"}.
+    None when there's no browser, the check is off, or the browser didn't report back."""
+    browser = _pdf_browser()
+    if browser is None or not _render_check_enabled():
+        return None
+    url = f"{_ensure_server()}raw/{exhibit_id}/{version}?check=1"
+    with tempfile.TemporaryDirectory(prefix="exhibit-check-", ignore_cleanup_errors=True) as work:
+        command = [
+            browser, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+            "--disable-extensions", "--hide-scrollbars", "--window-size=1280,900",
+            "--virtual-time-budget=6000",  # past the check script's last report at 4.5 s
+            f"--user-data-dir={Path(work) / 'profile'}", "--dump-dom", url,
+        ]
+        try:
+            done = subprocess.run(command, capture_output=True, timeout=_CHECK_TIMEOUT,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+    dom = done.stdout.decode("utf-8", "replace")
+    found = re.search(r'<script[^>]*\bid="exhibit-check"[^>]*>(.*?)</script>', dom, re.S)
+    if not found:
+        return None
+    try:
+        report = json.loads(found.group(1))  # script text isn't escaped when the DOM is written out
+    except ValueError:
+        return None
+    return report if isinstance(report, dict) else None
+
+
+def _check_note(report: dict) -> str | None:
+    """The show note for what the render check found, or None when the page drew cleanly."""
+    problems = []
+    for n, d in enumerate(report.get("diagrams") or [], 1):
+        if d.get("state") == "failed":
+            problems.append(f"Diagram {n} couldn't be drawn. Mermaid says: {d.get('error', '').strip()}")
+        elif d.get("state") == "empty":
+            problems.append(f"Diagram {n} came out empty.")
+    for d in report.get("small") or []:
+        problems.append(f"{d.get('name', 'A drawing')} has text drawn at {d.get('px')} px in a 1280 px wide window, "
+                        "too small to read. Make it larger: fewer things side by side (a top-to-bottom layout), "
+                        "shorter labels, or a bigger font.")
+    problems += [f"Script error: {e}" for e in report.get("errors") or []]
+    if not problems:
+        return None
+    return ("The page was opened in a browser after saving, and it has problems the user will see:\n- "
+            + "\n- ".join(problems[:8])
+            + "\nFix them now, before you reply: change the page (read the file again before editing it, or "
+              "write it whole) and call show again with this exhibit_id.")
+
+
+def _page_text(report: dict) -> str:
+    """The page's visible text as drawn, with blank lines squeezed, cut to a readable length."""
+    lines = [line.strip() for line in str(report.get("text") or "").splitlines()]
+    text = "\n".join(line for line in lines if line)
+    return text if len(text) <= _CHECK_TEXT_LIMIT else text[:_CHECK_TEXT_LIMIT].rstrip() + " …"
 
 
 # Slide navigation for exhibits made with the slides preset. It's added by the plugin, not written
@@ -3577,6 +4705,8 @@ def _preset_scripts(page: str, thumbnail: bool) -> str:
     chart kit when the page calls exhibit.chart(. Goes after the bridge, which defines window.exhibit."""
     kind = _page_kind(page)
     scripts = _CHART_KIT_SCRIPT if _uses_chart_kit(page) or kind == "charts" else ""
+    if _uses_diagram_kit(page):
+        scripts += _diagram_kit_script()
     if kind == "charts":
         scripts += _CHARTS_SCRIPT
     if kind == "slides":
@@ -3715,15 +4845,9 @@ def _insert_in_head(page: str, text: str) -> str:
 # Export > PNG: the page draws itself, as the user sees it (theme, scroll height, charts), into an
 # image at twice its size, using html-to-image from an approved CDN, loaded only when asked.
 _HTML_TO_IMAGE_URL = "https://cdn.jsdelivr.net/npm/html-to-image@1.11.11/dist/html-to-image.js"
-_SNAPSHOT_SCRIPT = """<script>(() => {
-  let loading = null;
-  const load = () => window.htmlToImage ? Promise.resolve(window.htmlToImage) : (loading = loading || new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "__URL__";
-    s.onload = () => (window.htmlToImage ? resolve(window.htmlToImage) : reject(new Error("the image maker didn't load")));
-    s.onerror = () => reject(new Error("the image maker couldn't be downloaded"));
-    document.head.appendChild(s);
-  }));
+_SNAPSHOT_SCRIPT = _LIB_LOADER_SCRIPT + """<script>(() => {
+  const load = () => window.__exhibitLoad("html-to-image", () => window.htmlToImage)
+    .catch(() => { throw new Error("the image maker couldn't be downloaded"); });
   const background = () => {
     for (const el of [document.body, document.documentElement]) {
       const c = el && getComputedStyle(el).backgroundColor;
@@ -3742,11 +4866,11 @@ _SNAPSHOT_SCRIPT = """<script>(() => {
       width: root.scrollWidth, height: Math.max(root.scrollHeight, document.body ? document.body.scrollHeight : 0),
     })).then((url) => answer({ url }), (err) => answer({ error: String((err && err.message) || err) }));
   });
-})();</script>""".replace("__URL__", _HTML_TO_IMAGE_URL)
+})();</script>"""
 
 
-def _inject_bridge(page: str, thumbnail: bool = False) -> str:
-    scripts = _BRIDGE_SCRIPT + (_CALM_SCRIPT if thumbnail else _QUOTE_SCRIPT + _SNAPSHOT_SCRIPT)
+def _inject_bridge(page: str, thumbnail: bool = False, check: bool = False) -> str:
+    scripts = (_CHECK_SCRIPT if check else "") + _BRIDGE_SCRIPT + (_CALM_SCRIPT if thumbnail else _QUOTE_SCRIPT + _SNAPSHOT_SCRIPT)
     scripts += _preset_scripts(page, thumbnail)
     return _insert_in_head(page, scripts)
 
@@ -3833,6 +4957,7 @@ def _version_input(inputs: dict[str, Any]) -> int | None:
 
 
 def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any]:
+    _start_library_fetch()
     action = inputs.get("action")
     if action not in _ACTIONS:
         raise _ToolFailure("invalid_input", f"action must be one of: {', '.join(_ACTIONS)}.")
@@ -3870,10 +4995,22 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
             "url": url,
             "opened": _open_browser(url, inputs.get("open")),
         }
+        notes = []
+        report = _render_check(meta["id"], version)
+        if report is not None:
+            result["page_text"] = _page_text(report)
+            check_note = _check_note(report)
+            if check_note:
+                notes.append(check_note)
         if _CHART_LIBS.search(page) and not _uses_chart_kit(page):
-            result["note"] = _OWN_CHART_NOTE
+            notes.append(_OWN_CHART_NOTE)
         elif _uses_chart_kit(page) and _OWN_TABLE.search(page):
-            result["note"] = _OWN_TABLE_NOTE
+            notes.append(_OWN_TABLE_NOTE)
+        diagram_note = _diagram_note(page)
+        if diagram_note:
+            notes.append(diagram_note)
+        if notes:
+            result["note"] = "\n\n".join(notes)
         return result
 
     if action == "gallery":

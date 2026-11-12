@@ -29,13 +29,28 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 ## Permissions and safety
 
 - **Sandbox:** exhibits run with an isolated origin, so they can't read other exhibits' data, call the local server, use cookies or `localStorage`, or read the page around them.
-- **No network:** exhibits can't use `fetch`, XHR or WebSockets, submit forms, or load images from the internet. Scripts and styles may load only from cdnjs.cloudflare.com, cdn.jsdelivr.net and unpkg.com, plus Google Fonts.
+- **No network:** exhibits can't use `fetch`, XHR or WebSockets, submit forms, or load images from the internet. Scripts and styles may load only from cdnjs.cloudflare.com, cdn.jsdelivr.net and unpkg.com, plus Google Fonts, and scripts also from the local server's copy of the plugin's libraries.
+- **Library copy:** the libraries in `~/.exhibit/lib` are downloaded from cdn.jsdelivr.net only, at pinned versions, and kept or served only if they match a SHA-256 fingerprint built into the plugin.
 - **Local server:** accepts only requests with the secret token and a `127.0.0.1`/`localhost` host, and refuses cross-site requests to the data API.
 - **Approvals:** the agent asks before deleting an exhibit; the tool refuses to delete without `confirm: true`.
 - **Known limits:** scripts from the three CDNs are trusted, and an exhibit could leak data by building a script address on those hosts. Any program running as your Windows user can read `~/.exhibit`.
 - **Dependencies:** Python standard library only. The tool does nothing at import time.
 
 ## Updates
+
+### 0.4.0 (in progress)
+
+- **Diagrams:** the agent writes Mermaid text in `<pre class="exhibit-diagram">` and the plugin draws it (flowcharts, sequence and state diagrams, database schemas, mind maps, timelines, architecture and more) in any exhibit format. Some features include:
+  - The page's own colours, light and dark, with one consistent look across all exhibits (a hidden `diagram_look` setting in `ui.json` switches between the "neo" and "classic" looks)
+  - Diagrams fit the page and appear in PDF and PNG exports
+  - A diagram that can't be drawn shows why in its place, and the agent is told about pages that load Mermaid themselves, Mermaid charts that should be real charts, and diagrams with no valid type
+  - Interactive, not static pictures:
+    - Hovering a box highlights it and its connections, and clicking pins it and shows the box's explanation if there is one.
+    - Wide diagrams get zoom buttons and can be dragged around.
+    - A **step-through** (Back, Play, Next, with a caption per step) goes through processes in order. The agent lists the steps; sequence diagrams, timelines, Gantt charts, user journeys and git histories step through automatically. Printed and PDF copies list the steps under the diagram.
+    - This works in every Mermaid diagram type: hovering a mind map branch lights up everything under it, a folder in a tree view its contents, a swimlane or Kanban column its cards.
+    - Pages can drive a diagram from their own controls with `exhibit.diagram("#id")` (highlight, go to a step, react to clicks, redraw).
+- **Faster charts and diagrams:** on first use the plugin downloads its libraries (ECharts, Mermaid, the PNG maker) into `~/.exhibit/lib`, checks each against a fixed fingerprint, and serves them itself. Before this, every chart page downloaded ECharts again on every load, because browsers give sandboxed pages an empty cache. Pages fall back to the CDN while the copy isn't there, and keep working offline once it is.
 
 ### 0.3.0
 

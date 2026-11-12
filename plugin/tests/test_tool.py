@@ -45,6 +45,9 @@ class ExhibitToolTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         os.environ["EXHIBIT_HOME"] = self.tmp.name
         os.environ["EXHIBIT_NO_BROWSER"] = "1"
+        os.environ["EXHIBIT_NO_LIB_DOWNLOAD"] = "1"
+        os.environ["EXHIBIT_NO_RENDER_CHECK"] = "1"  # a headless browser per show; one test turns it on
+        MOD._lib_cache.clear()
         self.tool = MOD.ExhibitTool()
 
     def tearDown(self):
@@ -441,7 +444,7 @@ class ExhibitToolTests(unittest.TestCase):
         exhibit = self.show()
         base = exhibit["url"].split("/e/")[0]
         gallery = _http(base + "/")[2]
-        self.assertIn(f'src="/{base.split("/")[-1]}/raw/{exhibit["exhibit_id"]}/1?thumb=1&b={MOD._BUILD}"', gallery)
+        self.assertIn(f'src="/{base.split("/")[-1]}/raw/{exhibit["exhibit_id"]}/1?thumb=1&b={MOD._page_version()}"', gallery)
         calm = _http(f"{base}/raw/{exhibit['exhibit_id']}/1?thumb=1")[2]
         self.assertIn('Object.defineProperty(window, "Chart"', calm)
         self.assertIn("animation:none!important", calm)
@@ -473,7 +476,10 @@ class ExhibitToolTests(unittest.TestCase):
         for setting in ('focus: "series"', 'trigger: "item"', "p.percent", "dataZoom", 'renderer: "svg"',
                         "aria: { enabled: true }", "spec.options", "prefers-color-scheme"):
             self.assertIn(setting, kit)
-        self.assertNotIn("</script", kit[len("<script>"):-len("</script>")])
+        # Two blocks: the shared library loader, then the kit; neither may close its own tag early.
+        self.assertTrue(kit.startswith(MOD._LIB_LOADER_SCRIPT))
+        for block in (MOD._LIB_LOADER_SCRIPT, kit[len(MOD._LIB_LOADER_SCRIPT):]):
+            self.assertNotIn("</script", block[len("<script>"):-len("</script>")])
         # Every chart's data can be edited, whatever its size (2026-11-10: the 100-value limit and table: false
         # went away), and only from the viewer's Edit data panel: the page has no editor of its own. The kit
         # reports its charts to the viewer and applies the edits, resets and PNG requests it sends back.
@@ -645,7 +651,7 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn("count them with a script, not by reading", skill)
         self.assertIn("| Change over time |", skill)
         self.assertNotIn("Updates from elsewhere", skill)
-        self.assertLess(len(skill.splitlines()), 220)  # 245 before the trim
+        self.assertLess(len(skill.splitlines()), 240)  # 245 before the trim; +30 for diagrams and their steps (0.4.0)
         self.assertIn("never from the original count or positions", skill)
 
     def test_freeform_points_to_the_chart_kit_and_show_notes_own_chart_libraries(self):
@@ -670,7 +676,7 @@ class ExhibitToolTests(unittest.TestCase):
         page = _http(exhibit["url"])[2]
         self.assertIn('id="copy-ref"', page)
         self.assertIn('id="quote-btn"', page)
-        self.assertIn(f'/raw/{exhibit["exhibit_id"]}/1?b={MOD._BUILD}"', page)  # a plugin update refetches pages
+        self.assertIn(f'/raw/{exhibit["exhibit_id"]}/1?b={MOD._page_version()}"', page)  # a plugin update refetches pages
         self.assertIn('id="delete-exhibit"', page)  # delete is its own button in the bar
         self.assertNotIn('label: "Copy reference"', page)  # the bar's actions aren't repeated in the menu
         self.assertNotIn('label: "Delete"', page)
@@ -1015,6 +1021,217 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertRegex(body, r'id="new-exhibit"[^>]*>.*?New</a>')
         self.assertNotIn("allow-same-origin", body)
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+
+    def test_local_library_copy_is_checked_and_served(self):
+        base = self.show()["url"].split("/e/")[0]
+        lib = MOD._LIBRARIES["html-to-image"]
+        url = f"{base}/lib/{lib['file']}"
+        self.assertEqual(_http(url)[0], 404)  # no copy yet: the page falls back to the CDN
+        self.assertEqual(_http(f"{base}/lib/evil.js")[0], 404)
+        # A file that doesn't match the fingerprint is never served.
+        folder = Path(self.tmp.name) / "lib"
+        folder.mkdir()
+        (folder / lib["file"]).write_bytes(b"alert(1)")
+        self.assertEqual(_http(url)[0], 404)
+        # The fetch keeps only the pinned file: a wrong download is dropped, the right one is kept.
+        payload = {"html-to-image": b"tampered", "other": b""}
+
+        class Fake:
+            def __init__(self, data): self.data = data
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self, n): return self.data[:n]
+        real_open = MOD.urllib.request.urlopen
+        good = None
+        try:
+            MOD.urllib.request.urlopen = lambda u, timeout: Fake(payload["html-to-image"]) if "html-to-image" in u else (_ for _ in ()).throw(OSError("offline"))
+            MOD._fetch_libraries()
+            self.assertEqual((folder / lib["file"]).read_bytes(), b"alert(1)")  # unchanged
+            # Pretend the pinned fingerprint is that of a small file, so the test needn't download.
+            good = b"window.htmlToImage = {};"
+            payload["html-to-image"] = good
+            saved = dict(lib)
+            lib.update(sha256=MOD.hashlib.sha256(good).hexdigest(), size=len(good))
+            MOD._fetch_libraries()
+            self.assertEqual((folder / lib["file"]).read_bytes(), good)
+            status, headers, body = _http(url)
+            self.assertEqual(status, 200)
+            self.assertEqual(body, good.decode())
+            self.assertTrue(headers["Content-Type"].startswith("text/javascript"))
+        finally:
+            MOD.urllib.request.urlopen = real_open
+            lib.update(saved) if good else None
+            MOD._lib_cache.clear()
+
+    def test_pages_may_load_scripts_from_the_plugin_server(self):
+        exhibit = self.show(html='<div id="c"></div><script>exhibit.chart("#c", {type: "bar", data: {a: 1}})</script>')
+        base = exhibit["url"].split("/e/")[0]
+        port = base.split(":")[2].split("/")[0]
+        status, headers, page = _http(f"{base}/raw/{exhibit['exhibit_id']}/1")
+        self.assertEqual(status, 200)
+        self.assertIn(f"http://127.0.0.1:{port}", headers["Content-Security-Policy"].split("script-src")[1].split(";")[0])
+        self.assertIn("window.__exhibitLoad", page)
+        self.assertIn(MOD._LIBRARIES["echarts"]["file"], page)
+        self.assertIn(MOD._LIBRARIES["echarts"]["url"], page)  # the CDN stays as the fallback
+        self.assertEqual(page.count("if (window.__exhibitLoad) return;"), 2)  # chart kit and PNG export share one loader
+        # An exported file can't reach the plugin's server, so it only has the CDN to load from.
+        name, exported = MOD._export_html(exhibit["exhibit_id"], None)
+        self.assertNotIn("127.0.0.1", exported)
+
+    def test_diagram_kit_only_on_pages_with_diagrams(self):
+        plain = self.show()
+        drawn = self.show(html='<h1>Flow</h1><pre class="exhibit-diagram" data-name="Flow">flowchart LR\n  A[Start] --> B[End<br>here]\n  %% steps: off</pre>')
+        self.assertNotIn("note", drawn)
+        base = drawn["url"].split("/e/")[0]
+        page = _http(f"{base}/raw/{drawn['exhibit_id']}/1")[2]
+        self.assertIn('LOOK = "neo", LAYOUT = "elk"', page)
+        self.assertIn('window.__exhibitLoad("mermaid"', page)
+        self.assertIn('"look", "layout"', page)  # a diagram's own settings can't change the look
+        self.assertNotIn("exhibit-diagram-box", _http(f"{base}/raw/{plain['exhibit_id']}/1")[2])
+        # The kit reads the block the way the browser will: tags dropped, <br> kept, entities decoded.
+        self.assertEqual(MOD._diagram_sources('<pre class="x exhibit-diagram">A &amp; B<br/>C <b>D</b></pre>'), ["A & B<br>C D"])
+        self.assertEqual(MOD._diagram_type("\n---\nconfig:\n  look: classic\n---\n%% note\nflowchart LR\nA-->B"), "flowchart")
+
+    def test_diagrams_are_interactive_and_the_agent_is_told_to_step_through(self):
+        kit = MOD._diagram_kit_script()
+        # Hover and click focus, steps (listed and automatic), details, zoom, the page hook, print.
+        for part in ('addEventListener("pointerover"', '%% step A, A->B: caption', "%% detail A: text", "%% steps: off",
+                     'role.startsWith("sequence")', 'role === "timeline"', 'role === "gantt"', 'role === "journey"',
+                     'role === "gitgraph"', 'role === "eventmodeling"', 'role === "mindmap"', 'role === "treeview"',
+                     'role === "architecture"', 'role === "wardley"', "innermost group with both a shape and a label",
+                     "▶ Play", "Next ›",
+                     'aria-label", label', "Zoom in", "host.diagram = ", "redraw(text)", 'on(event, fn)',
+                     "exhibit-diagram-print", "@media print", "prefers-reduced-motion", "IntersectionObserver"):
+            self.assertIn(part, kit, part)
+        for block in MOD.re.findall(r"<script>(.*?)</script>", kit, MOD.re.S):
+            self.assertNotIn("</script", block)
+        skill = (TOOL_FILE.parents[1] / "skills" / "exhibit" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("always add a step-through", skill)
+        self.assertIn("%% step A->B, B:", skill)
+        self.assertIn("%% detail", skill)
+        self.assertIn('exhibit.diagram("#id")', skill)
+        self.assertNotIn("A diagram is a picture", skill)  # what made agents stop adding interaction
+        self.assertIn("%% step lines for a step-through", MOD._FREEFORM_NEXT)
+        # Explainers aren't forced into Mermaid: a visual that moves with real state is built by hand.
+        self.assertIn("#### Visuals that move: build them yourself", skill)
+        self.assertIn("so it moves with the real state", MOD._FREEFORM_NEXT)
+        self.assertIn("`timeline` (each event)", skill)
+
+    def test_diagram_kit_general_behaviour(self):
+        kit = MOD._diagram_kit_script()
+        # The agent's Mermaid is drawn as written: mistakes come back from show's render check instead
+        # of being patched per diagram type.
+        self.assertIn("mermaid.render(d.renderId, d.source)", kit)
+        self.assertNotIn("forMermaid", kit)
+        # The source block never takes space, whatever the page's CSS gives it.
+        self.assertIn("pre.exhibit-diagram{display:none!important}", kit)
+        # On ordered types every step line is a caption, however it's written.
+        self.assertIn("d.extras.steps.map((s) => s.caption)", kit)
+        # Timelines step through each event with its period, not each period.
+        self.assertIn('caption: p.label + ": " + ev.label', kit)
+        # Each diagram says whether it drew, for the render check.
+        self.assertIn('d.wrap.dataset.state = "failed"', kit)
+        self.assertIn('d.wrap.dataset.state = "drawn"', kit)
+        # Wide diagrams aren't shrunk until their text is unreadable (Kit round 3: 7.5 px timeline labels):
+        # they start at a readable size and scroll sideways; Zoom out still fits the width.
+        self.assertIn("const MIN_TEXT = 11;", kit)
+        self.assertIn("let level = readable > fit * 1.05 ? 1 : 0;", kit)
+        # Every step the user takes brings what it lights up into view (with the controls when both fit).
+        self.assertIn("if (show) reveal(d, on);", kit)
+        self.assertIn('ui.next = button("Next ›", "Next step", () => { stopPlay(d); showStep(d, d.step + 1, true); });', kit)
+        self.assertIn("mark.scrollIntoView(", kit)
+
+    def test_check_note_lists_what_went_wrong(self):
+        self.assertIsNone(MOD._check_note({"errors": [], "diagrams": [{"state": "drawn"}], "text": "Hi"}))
+        note = MOD._check_note({"errors": ["boom (line 3)"], "diagrams": [
+            {"state": "drawn"}, {"state": "failed", "error": "Parse error on line 4"}, {"state": "empty"}]})
+        self.assertIn("Diagram 2 couldn't be drawn. Mermaid says: Parse error on line 4", note)
+        self.assertIn("Diagram 3 came out empty.", note)
+        self.assertIn("Script error: boom (line 3)", note)
+        small = MOD._check_note({"errors": [], "diagrams": [{"state": "drawn"}], "small": [{"name": "Diagram 1", "px": 7.5}]})
+        self.assertIn("Diagram 1 has text drawn at 7.5 px in a 1280 px wide window, too small to read.", small)
+        self.assertIn("call show again with this exhibit_id", note)
+        self.assertEqual(MOD._page_text({"text": "  A \n\n\n B  "}), "A\nB")
+        self.assertTrue(MOD._page_text({"text": "x" * 5000}).endswith(" …"))
+        skill = (TOOL_FILE.parents[1] / "skills" / "exhibit" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("`page_text` is the page's visible text", skill)
+        self.assertNotIn("Syntax traps", skill)
+
+    def test_check_page_is_only_served_on_request(self):
+        exhibit = self.show(html="<p>Hello</p>")
+        base = exhibit["url"].split("/e/")[0] + "/"
+        plain = _http(f"{base}raw/{exhibit['exhibit_id']}/1")
+        checked = _http(f"{base}raw/{exhibit['exhibit_id']}/1?check=1")
+        self.assertNotIn('id = "exhibit-check"', plain[2])
+        self.assertIn('id = "exhibit-check"', checked[2])
+        self.assertEqual(checked[1].get("Cache-Control"), "no-store")
+        self.assertNotIn("page_text", exhibit)  # the check is off in tests unless a test turns it on
+
+    def test_render_check_in_a_real_browser(self):
+        browser, lib = MOD._pdf_browser(), Path.home() / ".exhibit" / "lib"
+        if browser is None or not (lib / MOD._LIBRARIES["mermaid"]["file"]).is_file():
+            self.skipTest("needs Edge or Chrome and a downloaded Mermaid")
+        for f in lib.iterdir():
+            (MOD._lib_dir()).mkdir(parents=True, exist_ok=True)
+            (MOD._lib_dir() / f.name).write_bytes(f.read_bytes())
+        os.environ.pop("EXHIBIT_NO_RENDER_CHECK", None)
+        clean = self.show(html="<h1>Hello</h1><p>World</p>")
+        self.assertNotIn("note", clean)
+        self.assertEqual(clean["page_text"], "Hello\nWorld")
+        broken = self.show(html='<pre class="exhibit-diagram">stateDiagram-v2\n  A --> "Two words"\n  %% steps: off</pre>'
+                                '<script>throw new Error("boom")</script><script>console.error("bad data", 3)</script>')
+        self.assertIn("Diagram 1 couldn't be drawn. Mermaid says: Parse error", broken["note"])
+        self.assertIn("Script error: Uncaught Error: boom", broken["note"])
+        self.assertIn("Script error: bad data 3", broken["note"])
+        # Text too small to read is reported for the page's own drawings...
+        tiny = self.show(html='<svg viewBox="0 0 2400 300" width="100%"><text x="10" y="40" font-size="16">Alpha</text>'
+                              '<text x="900" y="40" font-size="16">Beta</text></svg>')
+        self.assertIn("Drawing 1 (it starts “Alpha Beta”) has text drawn at", tiny["note"])
+        # ...while a wide Mermaid diagram stays readable on its own: the kit scrolls it instead of shrinking it.
+        events = "\n".join(f"  2026-{m:02d} : Milestone number {m}" for m in range(1, 13))
+        wide = self.show(html=f'<pre class="exhibit-diagram">timeline\n{events}</pre>')
+        self.assertNotIn("too small to read", wide.get("note", ""))
+
+    def test_diagram_notes_from_show(self):
+        own = self.show(html='<script src="https://cdn.jsdelivr.net/npm/mermaid@12/dist/mermaid.min.js"></script>'
+                             '<pre class="mermaid">graph TD; A-->B</pre>')
+        self.assertIn('<pre class=\\"exhibit-diagram\\">', json.dumps(own["note"]))
+        self.assertIn("loads or uses Mermaid itself", self.show(html='<div class="mermaid">graph TD; A-->B</div>')["note"])
+        pie = self.show(html='<pre class="exhibit-diagram">pie title Pets\n "Dogs" : 3</pre>')
+        self.assertIn("exhibit.chart", pie["note"])
+        self.assertIn("(pie)", pie["note"])
+        beta = self.show(html='<pre class="exhibit-diagram">radar\n axis A, B</pre>')
+        self.assertIn('Did you mean "radar-beta"?', beta["note"])
+        empty = self.show(html='<pre class="exhibit-diagram">\n\n</pre>')
+        self.assertIn('starts with "(nothing)"', empty["note"])
+        for fine in ("sequenceDiagram\n A->>B: hi", "stateDiagram-v2\n [*] --> A\n %% step A: Start", "erDiagram\n A ||--o{ B : has",
+                     "mindmap\n root", "architecture-beta\n service a(server)[A]", "flowchart LR\n A-->B\n %% steps: off",
+                     "timeline\n March : First prototype"):
+            self.assertNotIn("note", self.show(html=f'<pre class="exhibit-diagram">{fine}</pre>'), fine)
+        # Flowcharts and state diagrams with no step lines are pointed out (none had them in Kit round 1).
+        for stepless in ("flowchart TD\n A-->B", "stateDiagram-v2\n [*] --> A"):
+            note = self.show(html=f'<pre class="exhibit-diagram">{stepless}</pre>')["note"]
+            self.assertIn("Diagram 1 has no step-through", note)
+            self.assertIn('"%% steps: off"', note)
+        # A chart-library note and a diagram note can both apply.
+        both = self.show(html='<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>'
+                              '<pre class="exhibit-diagram">pie\n "A" : 1</pre>')
+        self.assertIn("own chart library", both["note"])
+        self.assertIn("(pie)", both["note"])
+
+    def test_diagram_look_setting_changes_the_page_address(self):
+        exhibit = self.show(html='<pre class="exhibit-diagram">flowchart LR\n A-->B</pre>')
+        neo = _http(exhibit["url"])[2]
+        self.assertIn(f"?b={MOD._BUILD}-neo", neo)
+        MOD._atomic_write(MOD._ui_path(), json.dumps({"diagram_look": "classic"}))
+        try:
+            classic = _http(exhibit["url"])[2]
+            self.assertIn(f"?b={MOD._BUILD}-classic", classic)  # cached pages get a new address, so the switch shows
+            self.assertIn('LOOK = "classic", LAYOUT = "dagre"', MOD._diagram_kit_script())
+            os.environ["EXHIBIT_DIAGRAM_LOOK"] = "neo"  # the environment variable wins
+            self.assertIn('LOOK = "neo", LAYOUT = "elk"', MOD._diagram_kit_script())
+        finally:
+            os.environ.pop("EXHIBIT_DIAGRAM_LOOK", None)
 
     def test_pins_order_gallery_and_column(self):
         first, second, third = self.show(title="First"), self.show(title="Second"), self.show(title="Third")

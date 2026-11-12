@@ -73,6 +73,7 @@ body { background:var(--bg); color:var(--fg); }
 Every exhibit should invite the user to explore and change it, even if they only asked for "a chart of X" or "a report on Y". Don't wait to be asked. Pick what fits the content:
 
 - **Charts:** always use `exhibit.chart` (below). Hover details, highlighting, legend toggles and zooming are built in, and the user edits a chart's data with the **Edit data** button in the exhibit's top bar.
+- **Diagrams:** use `<pre class="exhibit-diagram">` (below), with a step-through whenever it shows an order, and details on boxes that need explaining. To explain how something works (an algorithm, a simulation, a game), build the visual yourself so it moves with the real state ("Visuals that move" below).
 - **Data the user gave or that the exhibit is built on:** the user can always edit it, and totals, charts and conclusions update from the new values. For a chart, that's Edit data in the top bar; don't build another way to edit a chart's data. For other data (a table, the inputs of a calculation), make the cells editable.
 - **Tables:** add one only when the user asked for a table, or when a table is the main and only way to show the data (a comparison grid, a list of records). **Never add a read-only table that repeats a chart's data:** the chart already shows it, and Edit data already edits it. A table you do add has editable cells, sortable columns, and a filter or search box past about 15 rows.
 - **Numbers that depend on assumptions:** inputs or sliders for the assumptions, with results computed in code.
@@ -126,7 +127,39 @@ exhibit.chart("#sales", {
   - Fill every number that comes from the chart's data (totals, averages, stat tiles, percentages, summaries, other charts) in `onChange`, and only there, as in the example above.
   - The user can add and remove rows, so work from the `data` you're given (`data.x.length`, the names in `data.series`), never from the original count or positions.
 - **Filters and views:** when a filter, slider or other control changes which data the chart shows, call `exhibit.chart` again on the same element with the new data. The new chart replaces the old one (no need to clear the element first), and the user's edits stay with the data they were made on.
-- **Other visuals:** for maps, networks, heatmaps and other kinds of chart, use a library from the CDNs above.
+- **Other visuals:** for diagrams, see below. For maps, heatmaps, interactive networks and other kinds of chart, use a library from the CDNs above.
+
+#### Diagrams: `<pre class="exhibit-diagram">`
+
+For flowcharts, sequence diagrams, state machines, database schemas, class diagrams, mind maps, timelines, architecture and other boxes-and-arrows diagrams, write the diagram in Mermaid syntax inside `<pre class="exhibit-diagram">`. **Don't load Mermaid, and don't hand-draw a fixed boxes-and-arrows picture with SVG, CSS boxes or text art.** (A visual whose state changes as the user plays with it is different: see "Visuals that move" below.) Exhibit draws every such block in the page's colors, light and dark, in PDFs and PNGs, in every preset, and makes it interactive: hovering a box highlights it and its connections, clicking pins that, and wide diagrams get zoom buttons.
+
+**When a diagram shows an order (the steps of a process, a request moving through systems, state changes, an algorithm, a plan over time), always add a step-through.** List the steps as `%% step` lines in the diagram; Exhibit adds Back, Play and Next buttons and a caption, and lights up each step's boxes and arrows in turn. Add a `%% detail` line for any box that needs more explanation than its label; clicking the box shows it.
+
+```html
+<pre class="exhibit-diagram" data-name="Refund process">
+flowchart TD
+  A[Customer submits request] --> B{Under 30 days?}
+  B -->|yes| C[Full refund]
+  B -->|no| D[Reject] --> E[Appeal] --> B
+  %% step A: The customer submits a refund request.
+  %% step A->B, B: Support checks the order date.
+  %% step B->C, C: Under 30 days: the refund goes through.
+  %% step B->D, D, D->E, E: Older orders are rejected, and the customer can appeal.
+  %% detail E: Appeals are reviewed by a team lead within 5 working days.
+</pre>
+```
+
+- **Steps:** each `%% step` line names the parts of one step, by id (`A`) or by their label text, and arrows (`A->B`), then a colon and a caption. Some types step through automatically in their own order: `sequenceDiagram` (each message), `timeline` (each event), `gantt` (each task, by date), `journey` (each task) and `gitGraph` (each commit). There, `%% step: caption` lines only replace the default captions, in order. `%% steps: off` turns stepping off. Hover, click and `%% detail` work in every diagram type.
+- **The first line is the diagram type:** `flowchart TD` (or `LR`), `sequenceDiagram`, `stateDiagram-v2`, `erDiagram`, `classDiagram`, `mindmap`, `timeline`, `gantt`, `gitGraph`, `journey`, `C4Context`, `block`. Newer types end in `-beta`: `architecture-beta`, `swimlane-beta`, `ishikawa-beta`, `venn-beta`, `treeView-beta`. `data-name` names it for screen readers.
+- **Numbers go in charts:** never Mermaid's `pie`, `xychart`, `quadrantChart`, `sankey`, `radar-beta` or `treemap-beta`; use `exhibit.chart`, so the user can edit the data.
+- **Size:** diagrams shrink to fit the page width. With more than about 5 steps in a row, use `flowchart TD`, not `LR`. On a slide, keep to about 8 boxes.
+- **Look:** Exhibit sets colors and style; leave out `config`, `theme` and `look`. Use `classDef` or `style` only to mark meaning, such as one highlighted path.
+- **Syntax:** quote labels that contain punctuation (`A["Refund (minus 10%)"]`) and use `<br>` for a line break. Each diagram type has its own grammar; when one doesn't draw, `show` gives you Mermaid's exact error, so fix the line it points to.
+- **Your own controls:** for sliders, toggles, quizzes or anything else that should change the diagram, give the block an `id` and use `exhibit.diagram("#id")`, which returns (as a Promise) a handle with `highlight(["A", "A->B"], caption)`, `goTo(step)`, `clear()`, `on("click", (box) => ...)`, `on("step", (n) => ...)` and `redraw(newMermaidText)`.
+
+#### Visuals that move: build them yourself
+
+When the exhibit explains how something works (graph search, sorting, a queue, a simulation, a game board), draw it yourself in SVG or canvas with your own JavaScript, so the picture follows the real state. A Mermaid diagram only lights up boxes; it can't show a stack growing or a node being visited. Run the actual algorithm or model one step at a time and redraw from its state, showing that state beside the picture (the stack, the queue, the totals). Add Play/Pause, Step, Reset, a speed slider and inputs for what the user would change, two versions side by side for a comparison, and a one-line caption that updates on every step. Read colors from the CSS variables, as above.
 
 ### 3. Save data when the exhibit should remember things
 
@@ -152,7 +185,7 @@ await exhibit.clear();
 - `title`: short, and specific to this exhibit ("Benchmark scores by app", not just "Benchmark results"). If another exhibit already has the name, the tool adds a number, like "Benchmark scores by app (2)"; the `title` in the result is the final name, so use that when you mention the exhibit.
 - `summary`: one line saying what it shows. It appears under the title in the user's exhibits gallery.
 - `html`: the whole page as one string. **For long pages (slides, dashboards, anything over a few hundred lines), save it first with `write_file` and pass its full path as `html_file` instead.**
-- If the result has a `note`, do what it says.
+- `show` opens the saved page in a browser before it answers. Its `note` lists anything that went wrong there (a diagram that didn't draw, a script error, text drawn too small to read); do what it says. `page_text` is the page's visible text as the user will see it: read it, and fix any number, label or word that isn't what you meant before you reply.
 
 To change an exhibit, send the full new HTML with its `exhibit_id`. This adds a new version and keeps the saved data:
 
