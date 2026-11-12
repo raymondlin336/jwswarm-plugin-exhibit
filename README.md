@@ -1,6 +1,6 @@
-<img src="docs/logo.svg" width="88" alt="Exhibit logo">
+<p align="center"><img src="docs/logo.svg" width="88" alt="Exhibit logo"></p>
 
-# Exhibits for WorkSwarm
+<h1 align="center">Exhibits for WorkSwarm</h1>
 
 A WorkSwarm plugin that lets the agent answer with a page instead of a chat message: a document, a slide deck, charts, or a freeform page (dashboard, calculator, tracker, explainer, etc). Exhibits open in your browser, keep their versions, can save what you enter, and can be exported.
 
