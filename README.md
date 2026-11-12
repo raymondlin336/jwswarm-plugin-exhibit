@@ -1,151 +1,190 @@
-# Exhibit: interactive exhibits for WorkSwarm (prototype)
+<img src="docs/logo.svg" width="88" alt="Exhibit logo">
 
-Exhibit lets the WorkSwarm agent build exhibits: documents, slide decks, dashboards, calculators, trackers, charts and small apps. They open in a sandboxed browser tab. Each exhibit keeps its versions and can save what you enter, which the agent can read back.
+# Exhibits for WorkSwarm
 
-It's a prototype of Claude-style artifacts for WorkSwarm. ("Artifact" already means self-improvement outputs in WorkSwarm's backend, so each item here is an *exhibit*.) WorkSwarm's own HTML preview blocks scripts, and its built-in browser refuses `localhost`, so a plugin can only open exhibits in the user's default browser. The longer-term fix belongs in WorkSwarm itself (see "Why a plugin" below).
+A WorkSwarm plugin that lets the agent answer with a page instead of a chat message: a document, a slide deck, charts, or a freeform page (dashboard, calculator, tracker, explainer, etc). Exhibits open in your browser, keep their versions, can save what you enter, and can be exported.
 
-![The Exhibits Gallery: exhibits of every format, each marked with its format](docs/all-exhibits.webp)
+Similar to artifacts in Claude and canvas in ChatGPT and Gemini.
 
-## What you get
+**Status: 0.4.0** Tested with deepseek-v4-flash. Slides, charts and freeform are usually clean. For freeform, it works mostly if prebuilt componenent are widely majority.
 
-- **Four formats.** Before writing a new exhibit, the agent asks which kind you want:
-  - **Document**: reports, proposals, memos, letters, meeting notes.
-  - **Slides**: a 16:9 deck.
-  - **Charts & Graphs**: charts and stat tiles whose data you can edit.
-  - **Freeform**: a freeform page, such as a dashboard, calculator or tracker.
+![The Exhibits Gallery](docs/gallery.webp)
 
-  Documents, slides and charts start from a ready-made page, so they come out consistent and quickly. Freeform pages are written from scratch.
-- **Charts, diagrams and page parts built in.** 17 chart types with editable data, interactive diagrams with step-throughs (flowcharts, sequences, Gantt charts, timelines and more), and ready-made callouts, stat tiles, comparisons and other parts, all in the page's colours, light and dark. Each page is opened and checked before you see it.
-- **The Exhibits Gallery.** Every exhibit with a preview, search, your open exhibits as tabs, and an icon for each exhibit's format. Pin an exhibit to keep it at the top of the gallery and in the Pinned list in the side column.
-- **Versions and saved data.** Every change is a new version you can go back to. Exhibits can save what you enter (ticks, inputs, the slide you were on), and the agent can read it.
-- **Export.** HTML for every exhibit. PDF for documents, slides and charts. Markdown for documents. PNG for charts.
-- **Point at an exhibit in chat.** Paste a reference, or quote a passage you selected, and the agent knows exactly which exhibit and which part you mean.
-- **Exhibits remember the chat they were made in,** so the agent can look up the conversation behind one.
+## How it's built
 
-## Formats
+| Part | What it is |
+|---|---|
+| Tool | `exhibit`, Python standard library only. Actions: `show`, `preset`, `list`, `gallery`, `read`, `open`, `delete`, `stop` |
+| Rail | `ExhibitAskRail`, on WorkSwarm's `ask_user` interrupt |
+| Skill | `skills/exhibit/`: when to make an exhibit, how to write one, and the presets |
+| Server | Python `http.server` on `127.0.0.1` |
+| Tests | 135 (87 tool, 48 rail), Python 3.11 with the real openjiuwen |
+
+### Functions & Dependencies
+
+| Used for | What |
+|---|---|
+| Charts | Apache ECharts 5.5.1, wrapped in the plugin's chart kit |
+| Diagrams | Mermaid 12.3.0, wrapped in the plugin's diagram kit |
+| PNG export | html-to-image 1.11.11 |
+| Page check, PDF | Headless Edge or Chrome |
+| Prebuilt UI Components | Standardized set that is easy to use, can be modified|
+
+### Plugin - Tool
+
+- Declares itself directly visible, so WorkSwarm's progressive tool loading doesn't hide it behind `tool_search`.
+- **Presets:** sample pages in `plugin/exhibit/skills/exhibit/presets/`. A new version in another format (`preset_locked`) or missing the preset's structure (`preset_structure`) is refused.
+- **Page check:** before the agent replies, the page is opened in headless Edge.
+  - Refused: read-only tables of numbers, navigation menus / sticky headers / "back to top" on freeform pages, emojis in headings, buttons and labels.
+  - Notes back to the agent: script errors, diagrams that didn't draw, text too small to read, a value axis with no name, prose put in boxes, a heading that repeats the chart title, a score bar on its own, page CSS restyling the page parts, reference lists numbered twice.
+- **Libraries:** downloaded once from jsDelivr at pinned versions into `~/.exhibit/lib`, checked against SHA-256 hashes in the plugin, and served locally. Works offline after that.
+
+### Plugin - Rail
+
+- Asks for the format before a new exhibit. Confirms every delete.
+- One question at a time (WorkSwarm takes one answer at a time).
+- Makes the agent load the skill before showing anything.
+- Fills in the page the agent just saved when `show` arrives without one.
+- Keeps `.html` files with scripts out of the file preview panel.
+- Stops an identical failing call after 3 tries in a turn.
+- Runs just before the permission rail and removes its answer after reading it, otherwise the permission rail denies the resumed call.
+
+### Storage and server
+
+- `~/.exhibit/exhibits/<exhibit_id>/`: `v1.html`, `v2.html`, …, `meta.json`, `data.json`. Set `EXHIBIT_HOME` to move it.
+- Server starts in the agent process on first use: `127.0.0.1`, random port, secret token in every URL (`/<token>/e/<exhibit_id>`).
+- The outer page (title, page control, versions, export) is trusted. The exhibit runs in `<iframe sandbox="allow-scripts …">` without `allow-same-origin`, and its own response has a CSP `sandbox` too.
+- Saved data: `window.exhibit.get/set/remove/all/clear`, sent by `postMessage` to the outer page, which is the only caller of the data API. 1 MB per exhibit.
+
+## Using it
+
+Ask for something that suits a page. Before a new exhibit, a dialog asks for the format: Document, Slides, Charts & Graphs, Freeform, or Answer in chat (if you didn't ask for an exhibit). Edits to an existing exhibit aren't asked about and become new versions. The agent replies with a link that opens in your browser.
+
+![The format dialog in WorkSwarm](docs/format-dialog.webp)
+
+### Formats
 
 | | Document | Slides | Charts & Graphs | Freeform |
 |---|---|---|---|---|
-| Looks like | US Letter pages, like a word processor | 16:9 slides, one at a time | Chart cards and stat tiles | Whatever the page needs |
-| Top bar | Page control: ‹ 2 / 8 ›, type a number to jump | Slide control, plus arrow keys and swipes | Edit data | Edit data, if the page has charts |
-| Export | HTML, PDF, Markdown (.md, or .zip with images) | HTML, PDF (one slide per page) | HTML, PDF, PNG (the whole page) | HTML |
+| Looks like | US Letter pages | 16:9 slides | Chart cards and stat tiles | Anything |
+| Top bar | Page control ‹ 2 / 8 › | Slide control, arrow keys, swipes | Edit data | Edit data, if it has charts |
+| Export | HTML, PDF, Markdown | HTML, PDF | HTML, PDF, PNG | HTML |
 
-**An exhibit's format never changes.** The page control, the page layout and the exports depend on it, so a new version must be in the same format. To get a different format, make a new exhibit. (Switching formats is on the to-do list.)
+A format can't be changed after the exhibit is made. Page and slide controls are drawn by the plugin, so the agent's edits can't break them.
 
-**The plugin draws the controls, not the page.** The page layout, page numbers, slide navigation and slide size are added by Exhibit itself. An agent's edit can't break them, and older exhibits get them too.
+#### Document
 
-### Document
+![A document exhibit: a report with key findings and contents, page control in the top bar](docs/document.webp)
 
-![A document exhibit: US Letter pages with numbered sections and a captioned table, and the page control in the top bar](docs/document.webp)
+- Same pages on screen and in the PDF. Paragraphs, tables and figures aren't split; headings stay with what follows.
+- Sections, figures and tables number themselves.
+- Layouts: report, one-page brief, memo/letter, meeting notes (action items can be ticked).
 
-- **The same pages on screen and in the PDF.** Paragraphs, tables and figures are never split across pages, and headings stay with what follows them.
-- **Numbering:** sections, figures and tables number themselves.
-- **Layouts:** report, one-page brief, memo or letter, and meeting notes. Ticks on meeting-notes actions are saved.
+#### Slides
 
-### Slides
+![A slide deck exhibit, slide control in the top bar](docs/slides.webp)
 
-![A slide deck exhibit: a slide of big numbers, with the slide control and the version picker in the top bar](docs/slides.webp)
+- Crowded slides shrink text down to 60%, then scroll.
+- Reopens on the slide you were on.
 
-- **Text fits.** A crowded slide shrinks its text to fit, down to 60%, and scrolls past that, so nothing is cut off.
-- **Remembers your place:** the deck reopens on the slide you were on.
+#### Charts & Graphs
 
-### Charts & Graphs
+![A Charts & Graphs exhibit: stat tiles and a grouped bar chart, Edit data in the top bar](docs/charts.webp)
 
-![A Charts & Graphs exhibit: a budget pie chart with a tooltip, stat tiles below, and the Edit data button in the top bar](docs/charts.webp)
+- Title, one-line takeaway, chart cards and stat tiles (total, average, highest, lowest, change, growth) computed from the data.
+- **Edit data:** change values, add/remove/drag rows, reset. Charts and tiles redraw as you type, and edits are saved.
 
-- **17 chart types,** drawn by the plugin with Apache ECharts in the page's colours, light and dark: line, area, bar, pie, donut and scatter, plus dot plots, histograms, box plots, heatmaps, calendar heatmaps, waterfalls, funnels, treemaps, sunbursts, sankeys and radar charts. Bars lie sideways by themselves for long labels and stacked data, and value axes show their unit and which way is better.
-- **Stat tiles that update:** totals, averages, highest, lowest, change and growth are worked out from the chart data.
-- **Edit data in the top bar:** opens a panel beside the exhibit with each chart's values. Change values, add or remove rows, drag rows to reorder, or reset. The charts and stats redraw as you type, and edits are saved. Labels stay fixed.
-- **Export:** PDF, or PNG of the whole page.
+#### Freeform
 
-### Freeform
+![A freeform exhibit: an RRSP vs TFSA calculator with sliders, stat tiles and charts](docs/freeform.webp)
 
-![A freeform exhibit: a dashboard of tasks completed per day, with stat tiles, a bar chart and a table](docs/free-form-dashboard.webp)
+Any single HTML page: widgets, calculators, checklists, step-throughs, drawn pictures, plus the charts, diagrams and page parts below. Results vary most here.
 
-Anything a single HTML page can do, with the same charts and Edit data panel, interactive diagrams with step-throughs (flowcharts, sequences, Gantt charts, timelines and more), ready-made page parts (callouts, stat tiles, comparisons, numbered steps and others), pictures the agent draws, libraries from approved CDNs, and saved data. Before a page is shown, Exhibit opens it and tells the agent about anything broken, and it refuses read-only tables of numbers, the page's own navigation menus and emojis in headings.
+### Charts, diagrams and page parts
 
-## Using exhibits in chat
+Available in every format, light and dark.
 
-- **Refer to an exhibit:** use the link icon in an exhibit's top bar (or Copy reference in the gallery's ⋯ menu), then paste it into the chat. The agent is told the exhibit's versions, summary and saved data.
+- **Charts:** line, area, bar, pie, donut, scatter, dot plot, histogram, box plot, heatmap, calendar heatmap, waterfall, funnel, treemap, sunburst, sankey, radar. Bars go sideways for long labels and stacked data. Value axes show units and which direction is better.
+- **Diagrams:** flowcharts, sequence and state diagrams, Gantt charts, timelines, mind maps, database schemas, architecture, etc. Hover highlights and step-throughs.
+- **Page parts:** callouts, panels, stat tiles, quotes, captions, sources, citations, tags, comparisons, term lists, numbered steps, meta rows, score bars. The agent can write its own when none fit.
+- **Visuals that move:** explainers (sorting, graph search, simulations) are drawn by the agent in its own SVG or canvas, running the real steps, with Play, Step, Reset and speed. A Mermaid diagram can only light up boxes.
+
+### When the agent uses what
+
+The agent plans each section before writing: its point, and the fastest way to show it.
+
+| Content | Form |
+|---|---|
+| Explanation, reasoning, findings | Plain paragraphs under headings. No cards, boxes or badges around prose; bold a phrase instead |
+| Numbers | A chart, type picked by the question (change over time → line, ranking → sorted bar, parts of a whole → pie/treemap, two measures → scatter, etc). Breakdowns stay stacked or grouped |
+| A process, structure or states | A diagram, with a step-through if there's an order |
+| A plan or history | Gantt chart or timeline |
+| Something physical (planets, a device, a place) | A drawn SVG picture, labelled, with scale stated |
+| Something the reader can change | A widget, only if there's an input and an output that follows it |
+| A list the user works through | Saved checkboxes |
+| Tables | Only when asked, and editable |
+
+Page parts each have one job:
+
+- **Callout:** the one thing not to miss in a section, or key takeaways.
+- **Panel:** a short set of related items.
+- **Stat tiles:** 2 to 4 headline numbers.
+- **Comparison:** strengths vs weaknesses, or A vs B.
+- **Score bars:** only to compare 2+ items on one scale, never one alone.
+- **Numbered steps, term lists, quotes, sources, citations, tags:** what their names say.
+
+The agent shouldn't write CSS for page parts. If the user asks for a different look, its own CSS or the part variables (`--ex-accent`, `--ex-radius`, `--ex-soft`, `--ex-pad`) override them.
+
+### Look and style
+
+- **Colours:** WorkSwarm's logo orange (`#ff8821`) is the accent, with a darker orange (`#b85500`) for small text on white. Yellow = warning, green = good, red = bad.
+- **Theme:** follows the system's light/dark setting. Every colour is a CSS variable; the agent doesn't pick dark itself.
+- **Shapes:** square corners by default. Numbered steps are orange hexagons, like the WorkSwarm logo. Stat tiles and panels share the same soft background.
+- **Charts:** titles centred, legend gets its own room, axis names kept inside the chart, stacked bars rounded only on the outer end.
+- **No emojis** unless the user asks.
+
+### Gallery, versions, data, export
+
+- **Gallery:** previews, search, open exhibits as tabs, format icons, pinning. Rename, delete, copy reference from the ⋯ menu.
+- **Versions:** every change is a new version, pick older ones from the top bar.
+- **Saved data:** ticks, inputs, current slide, etc. The agent can read it.
+- **Export:** HTML for all; PDF for documents, slides, charts; Markdown for documents; PNG for charts. PDFs are printed by headless Edge or Chrome, no print dialog.
+
+### In chat
+
+- **Reference an exhibit:** link icon in the top bar (or Copy reference in the gallery), then paste. The agent gets its versions, summary and saved data.
 
   ```
   @exhibit(Monthly budget #8d02e7) why is rent so high?
   ```
 
-- **Quote part of it:** select text in an exhibit and click Quote. The reference and the quoted text are copied together, ready to paste:
+- **Quote part of one:** select text, click Quote, paste.
 
   ```
   @exhibit(Monthly budget #8d02e7)
   > Rent | $1,500 | Fixed
   ```
 
-- **Delete several at once:** "delete all my exhibits" shows one dialog listing them.
+- Each exhibit records the chat it was made in, so the agent can look it up.
+- Deletes are confirmed in a dialog. Deleting several shows one dialog.
 
-## How it works
+## Plugin, and potential future integration with WorkSwarm
 
-- **One tool, `exhibit`,** with actions `show`, `preset`, `list`, `gallery`, `read`, `open`, `delete` and `stop`. Standard library only. It declares itself directly visible, because WorkSwarm's progressive tool loading would otherwise hide it behind `tool_search`.
-- **One rail, `ExhibitAskRail`.** It uses the same interrupt as WorkSwarm's `ask_user`:
-  - **Picking the preset:** before a new exhibit, it asks you to pick one (Document, Slides or Freeform), plus "Answer in chat" if you didn't ask for an exhibit.
-  - **Deletes:** it confirms every delete in a dialog.
-  - **One question at a time:** WorkSwarm accepts only one answer at a time.
-  - **Skill first:** it makes the agent load the exhibit skill before showing anything.
-  - **Missing page:** it fills in the page the agent just saved when a `show` arrives without one.
-  - **Script-filled HTML files:** it keeps `.html` files with scripts out of the file preview panel.
-  - **Repeated failures:** it stops an identical failing call after 3 tries in a turn.
+A plugin can't change WorkSwarm's frontend. WorkSwarm's HTML preview blocks scripts and its built-in browser refuses `localhost`, so exhibits open in the default browser. 9 of the 11 Hub plugins with interfaces we checked run their own `127.0.0.1` servers for the same reason.
 
-  It runs just before WorkSwarm's permission rail and removes its answer after reading it, since the permission rail otherwise denies the resumed call.
-- **Presets** are sample pages under `plugin/exhibit/skills/exhibit/presets/`, each with a guidance comment for the agent. Each version records its format, and the tool refuses a version in another format (`preset_locked`) or a page missing the preset's structure (`preset_structure`).
-- **Storage:** `~/.exhibit/exhibits/<exhibit_id>/` holds `v1.html`, `v2.html`, …, `meta.json` and `data.json`. Set `EXHIBIT_HOME` to move it.
-- **Server:** a small HTTP server on `127.0.0.1` with a random port, started inside the agent process on first use. Every URL includes a secret token. Exhibits open at `/<token>/e/<exhibit_id>`.
-- **Sandbox:** you see a trusted outer page (title, page control, versions, export) with the exhibit inside an `<iframe sandbox="allow-scripts …">` without `allow-same-origin`. The exhibit's own response also carries a CSP `sandbox` directive, so it stays sandboxed even if opened on its own.
-- **Saved data:** the exhibit calls `window.exhibit.get/set/remove/all/clear`. These go by `postMessage` to the outer page, which is the only thing allowed to call the data API.
-- **PDF export:** a hidden (headless) Microsoft Edge, or Chrome, prints a standalone copy of the exhibit straight to a PDF file, with the exhibit's usual content limits applied. There's no print dialog. If no browser is found, the print dialog opens instead.
+The plan is for this to move into WorkSwarm:
 
-### Security checks
+- **Show exhibits inside the app** in a side panel, scripts enabled, isolated origin. The gallery already follows WorkSwarm's UI so it can become a side menu entry.
+- **Support MCP Apps** (SEP-1865), the MCP extension for interactive UI that several AI clients already support, so plugins and connectors don't each need a server.
+- **Keep the rest:** formats, presets, chart and diagram kits, page parts, page check, versions, saved data, export.
 
-| Threat | Defense |
-|---|---|
-| Exhibit reads other exhibits' data or calls the server | Opaque origin (sandbox without `allow-same-origin`), `connect-src 'none'` |
-| Exhibit sends saved data to the internet | `connect-src 'none'`, `form-action 'none'`, images limited to `data:`/`blob:`; scripts and styles only from three CDNs |
-| Websites the user visits call the server | Secret token in every path; data API refuses requests whose `Sec-Fetch-Site` isn't `same-origin` or whose `Origin` doesn't match |
-| DNS rebinding | `Host` must be `127.0.0.1:<port>` or `localhost:<port>` |
-| Outer page framed by another site | `frame-ancestors 'none'` |
-| Prompt injection via saved data or quotes | The skill and the rail tell the agent to treat saved data and quoted text as data, not instructions |
+Current limits:
 
-Known gaps: scripts from the three CDNs are trusted; an exhibit can still beacon out through a CDN URL it builds (`script-src` allows those hosts). Any process running as the same Windows user can read `~/.exhibit`.
-
-## Verified
-
-- **In WorkSwarm 0.2.7** (model deepseek-v4-flash), all of the following worked end to end:
-  - making documents, slide decks and freeform exhibits from the preset dialog;
-  - editing them into new versions;
-  - the Exhibits Gallery, pinning, deleting, references and quotes.
-- **PDFs:** documents come out as US Letter pages that break where the screen pages do; decks as 13.33 × 7.5 in pages, one slide per page.
-- **Unit tests:** 102 in total, 56 for the tool and 46 for the rail. Two of them render real PDFs and are skipped without Edge or Chrome. They run on Python 3.11 (WorkSwarm's version) with the real openjiuwen: `powershell -File plugin\run_tests.ps1`. That uses the AgentStudio venv; set `EXHIBIT_PYTHON` to use another 3.11 interpreter.
-- **The rail's pause and resume,** and its ordering with the permission rail, run against openjiuwen's real interrupt code (AgentStudio venv, openjiuwen 0.1.17).
-- **The sandbox,** in headless Microsoft Edge:
-  - saved data persisted across loads;
-  - Chart.js loaded from jsDelivr;
-  - all five break-out attempts were blocked: server API, internet fetch, `localStorage`, reading the outer page, cookies.
-
-## Known limitations (0.2.2)
-
-- **Exhibits open in the browser, not inside WorkSwarm.** The way back to one is the link in the chat, or the Exhibits page and its tabs.
-- **An exhibit's format can't be switched.** Make a new exhibit in the other format instead.
-- **No photos from the web.** Images must be embedded in the page, so the agent draws diagrams instead of using real photos. Tool-side photo embedding is on the to-do list.
-- **PDF export needs Microsoft Edge or Chrome.** Edge is built into Windows 10 and 11.
-- **You always pick the preset;** the agent doesn't suggest one yet.
-- **The New exhibit button isn't hooked up yet,** and page labels are English only.
-- **Reinstalling the same version** may keep the old copy. Remove Exhibit under Extensions before importing a new build.
+- Exhibits open in the browser. The way back is the chat link or the gallery.
+- PDF export needs Edge (built into Windows 10/11) or Chrome.
+- No web images; the agent draws pictures instead.
+- The New exhibit panel isn't connected to the chat yet. Page labels are English only.
 
 ## Build and install
 
-```powershell
-powershell -ExecutionPolicy Bypass -File plugin\package.ps1
-```
-
-This writes `plugin\dist\exhibit-0.2.2.zip`. Import it in WorkSwarm under Extensions, the same way as the Obsidian CLI plugin.
-
-## Why a plugin, and what WorkSwarm itself should do
-
-A plugin can't change WorkSwarm's frontend, so exhibits open in a separate browser tab. Nine of the eleven Hub plugins with interfaces that we checked already run their own `127.0.0.1` servers for this; Exhibit could replace those one-off servers. The proper fix is in WorkSwarm: render exhibits inside the app with scripts enabled in an isolated origin, and support **MCP Apps** (SEP-1865), the interactive-UI extension Claude and ChatGPT use, so connectors can bring their own interfaces.
+Download `exhibit-0.4.0.zip` and add it in WorkSwarm under Extensions.
