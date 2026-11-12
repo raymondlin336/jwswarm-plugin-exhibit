@@ -551,7 +551,8 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertNotIn("note", shown)  # its data block isn't "a table of its own"
         # A broken data block is refused, saying what's wrong; so is leaving the format.
         for broken, words in ((page.replace('"charts": [', '"chartz": [', 1), "has no charts"),
-                              (page.replace('"type": "line"', '"type": "radar"', 1), "must be one of"),
+                              (page.replace('"type": "line"', '"type": "spiral"', 1), "must be one of"),
+                              (page.replace('"type": "donut"', '"type": "funnel"', 1), "uses a funnel chart; stats work on line, area, bar, pie and donut"),
                               (page.replace('"prefix": "$",', '"prefix": "$",,', 1), "isn't valid JSON")):
             failed = self.call(action="show", title="Broken", html=broken)
             self.assertEqual(failed.get("error_code"), "preset_structure")
@@ -628,8 +629,17 @@ class ExhibitToolTests(unittest.TestCase):
 
     def test_skill_makes_exhibits_interactive_and_uses_the_chart_kit(self):
         skill = (TOOL_FILE.parents[1] / "skills" / "exhibit" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertIn("Make it interactive, whether or not the user asked", skill)
-        self.assertIn("#### Interactive by default", skill)
+        # JWMemory capstone (2026-11-12): "Interactive by default" and "a table of contents" gave boxed prose,
+        # section menus and collapsibles; the form now follows what each section has to show.
+        self.assertIn("whether or not the user asked. See \"Choosing the form\" below.", skill)
+        self.assertIn("#### Choosing the form", skill)
+        self.assertIn("plan each section in one line", skill)
+        self.assertIn("A mechanism gets a widget only when the reader has an input to change", skill)
+        self.assertIn("Never a read-only table of numbers:** `show` fails on one", skill)
+        self.assertIn("**No emojis** in headings", skill)
+        self.assertIn("`page_rules`: nothing was saved", skill)
+        for gone in ("Interactive by default", "table of contents", "--card", "Make it interactive"):
+            self.assertNotIn(gone, skill)
         self.assertIn("exhibit.chart(", skill)
         self.assertNotIn("100 values", skill)  # every chart has the Edit data table
         self.assertIn("every chart's data can be edited from the **Edit data** button in the exhibit's top bar", skill)
@@ -643,15 +653,31 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn("never a saved copy, and don't save the chart's data with `exhibit.set`", skill)
         self.assertIn("call `exhibit.chart` again on the same element", skill)
         # Round 3: read-only copies of chart data, and `table: false` used to hide the editor.
-        self.assertIn("Never add a read-only table that repeats a chart's data", skill)
+        self.assertIn("A table goes in only when the user asks for one, with editable cells", skill)
         self.assertNotIn("`table: false` hides the table", skill)
         self.assertIn("It runs once when the chart first draws", skill)
         # Skill trim (2026-11-10): preset before gathering data, scripted counts, which chart for what.
         self.assertIn("before you gather data or read files for it", skill)
         self.assertIn("count them with a script, not by reading", skill)
-        self.assertIn("| Change over time |", skill)
+        # 0.4.0: the chooser asks the reader's question and covers the kit's 17 types.
+        self.assertIn("| How did it change over time? | `line`", skill)
+        for kind in ("`dot`", "`histogram`", "`boxplot`", "`heatmap`", "`calendar`", "`waterfall`", "`treemap`",
+                     "`sunburst`", "`funnel`", "`sankey`", "`radar`"):
+            self.assertIn(kind, skill)
+        self.assertIn("a page of only bar charts usually means", skill)
         self.assertNotIn("Updates from elsewhere", skill)
-        self.assertLess(len(skill.splitlines()), 240)  # 245 before the trim; +30 for diagrams and their steps (0.4.0)
+        # 245 before the trim; +30 for diagrams and their steps; +18 for page parts; +5 for drawn pictures,
+        # schedules and varied examples (0.4.0)
+        self.assertLess(len(skill.splitlines()), 266)
+        # E runs (2026-11-12): no run drew a picture or a Gantt chart; the forms list now names both.
+        self.assertIn("**A plan or a history over time**", skill)
+        self.assertIn("**A thing with a shape, a place or a scale**", skill)
+        self.assertIn("*\"Explain the water cycle\"*", skill)
+        self.assertIn("#### Page parts: `ex-` classes", skill)
+        self.assertIn("which always win. Build your own element only when no part fits.", skill)
+        self.assertIn("--accent:#ff8821; --accent-ink:#b85500;", skill)  # WorkSwarm's orange
+        # Capstone run of 2026-11-12: every table became one total or one column, and one table became two charts.
+        self.assertIn("Chart every column your source has: a breakdown by category is a stacked or grouped bar", skill)
         self.assertIn("never from the original count or positions", skill)
 
     def test_freeform_points_to_the_chart_kit_and_show_notes_own_chart_libraries(self):
@@ -1240,6 +1266,179 @@ class ExhibitToolTests(unittest.TestCase):
         events = "\n".join(f"  2026-{m:02d} : Milestone number {m}" for m in range(1, 13))
         wide = self.show(html=f'<pre class="exhibit-diagram">timeline\n{events}</pre>')
         self.assertNotIn("too small to read", wide.get("note", ""))
+
+    def test_chart_kit_picks_bar_orientation(self):
+        # Capstone rerun (2026-11-12): every bar chart stood up, even 9 long labels. Unless the spec says,
+        # the kit lays bars down for long or many named labels and keeps short ordered ones upright
+        # (checked in headless Edge at 1100 and 390 px: scores and variants lie down, months stay up).
+        kit = MOD._CHART_KIT_SCRIPT if hasattr(MOD, "_CHART_KIT_SCRIPT") else Path(MOD.__file__).read_text(encoding="utf-8")
+        self.assertIn("const horizontal = lying(spec, el);", kit)
+        self.assertIn("if (spec.horizontal !== undefined) return !!spec.horizontal;", kit)
+        self.assertIn("(x.length >= 7 && longest > 60) || longest > 100", kit)
+        self.assertIn("if (spec.stack && seriesOf(spec).length > 1) return true;", kit)  # stacked bars always lie down
+        # Stacked segments: only the outer one is rounded (rounding each left a notch at every join), and
+        # axis names stay inside the chart (centred under the bottom axis, above a side axis).
+        self.assertIn("borderRadius: k === outer[i] ?", kit)
+        self.assertIn('Object.assign(x, { nameLocation: "middle", nameGap: 28 });', kit)
+
+    def test_every_chart_type_draws_in_a_real_browser(self):
+        browser, lib = MOD._pdf_browser(), Path.home() / ".exhibit" / "lib"
+        if browser is None or not (lib / MOD._LIBRARIES["echarts"]["file"]).is_file():
+            self.skipTest("needs Edge or Chrome and a downloaded ECharts")
+        MOD._lib_dir().mkdir(parents=True, exist_ok=True)
+        (MOD._lib_dir() / MOD._LIBRARIES["echarts"]["file"]).write_bytes((lib / MOD._LIBRARIES["echarts"]["file"]).read_bytes())
+        os.environ.pop("EXHIBIT_NO_RENDER_CHECK", None)
+        x, two = ["Alpha", "Beta", "Gamma"], {"A": [1, 5, 3], "B": [4, 2, 6]}
+        specs = {
+            "line": {"x": x, "series": two}, "area": {"x": x, "series": two}, "bar": {"x": x, "series": {"Change": [3, -2, 5]}},
+            "scatter": {"series": {"P": [[1, 2], [3, 4]]}}, "pie": {"data": {"a": 1, "b": 2}}, "donut": {"data": {"a": 1, "b": 2}},
+            "histogram": {"series": {"T": [1, 2, 2, 3, 3, 3, 4, 9]}}, "boxplot": {"series": {"T": [1, 2, 2, 3, 3, 3, 4, 19], "U": [5, 6, 7]}},
+            "dot": {"x": x, "series": {"A": [1, None, 3], "B": [4, 2, 6]}}, "heatmap": {"x": x, "series": two},
+            "calendar": {"data": {"2026-03-01": 4, "2026-04-12": 7}}, "waterfall": {"x": x, "series": {"Change": [10, -4, 3]}},
+            "funnel": {"data": {"Seen": 100, "Tried": 40, "Paid": 9}}, "treemap": {"data": {"G / a": 3, "G / b": 2, "c": 4}},
+            "sunburst": {"data": {"G / a": 3, "G / b": 2, "c": 4}}, "sankey": {"data": {"In → Out": 5, "In → Lost": 2}},
+            "radar": {"x": ["p", "q", "r"], "series": two},
+        }
+        self.assertEqual(set(specs), set(MOD._CHART_TYPES))
+        calls = "".join(f'<div id="c-{k}"></div><script>exhibit.chart("#c-{k}", {json.dumps({"type": k, "title": k, "yLabel": "Units", **v})})</script>'
+                        for k, v in specs.items())
+        drawn = self.show(html="<h1>Every type</h1>" + calls)
+        self.assertNotIn("note", drawn)  # no script errors, nothing the kit refused
+        bad = self.show(html='<div id="s"></div><script>exhibit.chart("#s", {type: "sankey", data: {"In Out": 5}})</script>')
+        self.assertIn('Each sankey link is written \\"From → To\\"', json.dumps(bad["note"], ensure_ascii=False))
+
+    def test_page_parts_are_added_when_used_and_page_css_wins(self):
+        # Page parts (0.4.0): styles only on pages that use an ex- part, as plain class rules at the top of the
+        # head, so a page's blanket reset loses to them but its own rules for a part win; the render check
+        # doesn't call them "text in a box". (A cascade layer lost to a page's * { padding:0 }, 2026-11-12.)
+        self.assertTrue(MOD._uses_page_parts('<aside class="ex-callout">x</aside>'))
+        self.assertTrue(MOD._uses_page_parts("<span class='note ex-tag ex-warn'>x</span>"))
+        self.assertFalse(MOD._uses_page_parts('<div class="flex-row index-card">x</div>'))
+        self.assertNotIn("@layer", MOD._PARTS_STYLE)
+        self.assertNotIn("!important", MOD._PARTS_STYLE)
+        plain = self.show(html="<p>No parts here.</p>")
+        base = plain["url"].split("/e/")[0] + "/"
+        self.assertNotIn('data-exhibit-kit="parts"', _http(f"{base}raw/{plain['exhibit_id']}/1")[2])
+        if MOD._pdf_browser() is None:
+            return
+        os.environ.pop("EXHIBIT_NO_RENDER_CHECK", None)
+        prose = "Retrieval was the bottleneck for JWMemory: it saved 97% of the facts but delivered 76%. " * 2
+        probe = ('<script>document.body.insertAdjacentText("beforeend", " EDGES " + [...document.querySelectorAll(".ex-callout")]'
+                 '.map((e) => getComputedStyle(e).borderLeftColor).join("|") + " STEP " + getComputedStyle(document.querySelector(".ex-steps li")).paddingLeft'
+                 ' + " LIST " + getComputedStyle(document.querySelector(".ex-panel ul")).paddingLeft);</script>')
+        body = (f'<h1>Parts</h1><aside class="ex-callout"><p>{prose}</p></aside><div class="mine"><aside class="ex-callout"><p>{prose}</p></aside></div>'
+                f'<div class="ex-panel"><h4>Problems</h4><ul><li>{prose}</li></ul></div><ol class="ex-steps"><li><b>Retrieve</b>Each method searches.</li></ol>')
+        # A page with a blanket reset and no CSS for the parts: the reset doesn't flatten them, and there's no note.
+        reset = self.show(html="<style>* { margin: 0; padding: 0; } li { margin-bottom: .7rem; }</style>" + body + probe)
+        self.assertNotIn("note", reset)
+        self.assertIn("EDGES rgb(255, 136, 33)|rgb(255, 136, 33) STEP 46px LIST 20px", reset["page_text"])
+        # A page that restyles a part on purpose: its rule wins, and the note asks whether the user wanted that.
+        mine = self.show(html="<style>.mine .ex-callout { border-left-color: rgb(0, 128, 0); }</style>" + body + probe)
+        self.assertIn("EDGES rgb(255, 136, 33)|rgb(0, 128, 0)", mine["page_text"])
+        self.assertIn("The page's own CSS restyles Exhibit's page parts (.ex-callout)", mine["note"])
+        # Reference items that number themselves read "1. 1." inside a numbered list.
+        refs = self.show(html='<h1>Refs</h1><ol class="ex-refs"><li>1. LongMemEval.md</li><li>2. Agents.md</li></ol>')
+        self.assertIn("Reference items start with their own number (“1. LongMemEval.md”", refs["note"])
+
+    def test_chart_notes_and_lost_text_in_a_real_browser(self):
+        # Capstone rerun (2026-11-12): every chart sat under a heading repeating its title, and fixing a refused
+        # page deleted 33 lines. Notes on one-type pages and recited numbers were tried and dropped the same day.
+        browser, lib = MOD._pdf_browser(), Path.home() / ".exhibit" / "lib"
+        if browser is None or not (lib / MOD._LIBRARIES["echarts"]["file"]).is_file():
+            self.skipTest("needs Edge or Chrome and a downloaded ECharts")
+        MOD._lib_dir().mkdir(parents=True, exist_ok=True)
+        (MOD._lib_dir() / MOD._LIBRARIES["echarts"]["file"]).write_bytes((lib / MOD._LIBRARIES["echarts"]["file"]).read_bytes())
+        os.environ.pop("EXHIBIT_NO_RENDER_CHECK", None)
+        chart = ('<h3>Correct answers by setup</h3><div id="c"></div><script>exhibit.chart("#c", {type: "bar", '
+                 'title: "Correct answers by setup", x: ["Reflect", "Recall", "JWMemory", "Auto"], series: {Score: [37, 35, 33, 31]}})</script>')
+        recite = "<p>Reflect scored 37, recall 35, JWMemory 33 and auto memory 31 out of 40.</p>"
+        point = "<p>Reflect leads at 37, two ahead of recall, mostly on multi-session questions.</p>"
+        shown = self.show(html="<h1>Scores</h1>" + chart + recite + point)
+        self.assertIn("“Correct answers by setup” repeats the chart's own title", shown["note"])
+        # No yLabel: the value axis has no name or unit (every chart in the capstone runs). Named, with a
+        # direction: the kit writes it on the axis and the note goes away.
+        self.assertIn("The value axis of “Correct answers by setup” has no name", shown["note"])
+        named = self.show(html='<div id="n"></div><script>exhibit.chart("#n", {type: "bar", title: "Scores", yLabel: "Questions correct (of 40)", '
+                               'better: "higher", x: ["A", "B"], series: {Score: [37, 35]}})</script>')
+        self.assertNotIn("has no name", named.get("note", ""))
+        # A score bar on its own gets a note; two in a group don't.
+        bar = '<div class="ex-score"><span>{0}</span><div class="ex-track"><div class="ex-fill" style="width:50%"></div></div><span>36 / 72</span></div>'
+        lone = self.show(html="<h1>Lone</h1><p>Text.</p>" + bar.format("Keyword"))
+        self.assertIn("A score bar stands alone (“Keyword", lone["note"])
+        pair = self.show(html="<h1>Pair</h1><div>" + bar.format("Keyword") + bar.format("Semantic") + "</div>")
+        self.assertNotIn("score bar", pair.get("note", ""))
+        self.assertNotIn("recites", shown["note"])
+        bars = "".join(f'<div id="b{i}"></div><script>exhibit.chart("#b{i}", {{type: "bar", yLabel: "Units", x: ["a", "b"], series: {{v: [{i}, 2]}}}})</script>'
+                       for i in range(4))
+        self.assertNotIn("note", self.show(html="<h1>Bars</h1>" + bars))
+        # Lost text: the refused attempt's prose is remembered under its file and title.
+        prose = [f"<p>Passage {i}: a sentence long enough to count as prose in the lost text check.</p>" for i in range(4)]
+        page_file = Path(MOD._home()) / "draft.html"
+        page_file.write_text("<h1>Draft</h1><h2>🧠 Ideas</h2>" + "".join(prose), encoding="utf-8")
+        refused = self.call(action="show", title="Draft", html_file=str(page_file))
+        self.assertEqual(refused["error_code"], "page_rules")
+        page_file.write_text("<h1>Draft</h1><h2>Ideas</h2>" + prose[0], encoding="utf-8")
+        cut = self.show(title="Draft", html_file=str(page_file), html=None)
+        self.assertIn("3 passages of text that were on the page show refused are gone", cut["note"])
+        self.assertEqual(MOD._refused, {})  # used once, then forgotten
+
+    def test_page_rules_from_the_render_report(self):
+        layout = {"tables": ["Setup IE MR KU 9 8 4 3"], "nav": ["Intro Methods Benchmarks"],
+                  "emoji": ["🔤 Keyword-Based Retrieval"], "boxes": ["How it works: Matches memory entries"]}
+        broken = MOD._page_rules({"layout": layout}, "freeform")
+        self.assertEqual(len(broken), 3)
+        self.assertIn("1 read-only table of numbers (“Setup IE MR KU 9 8 4 3”)", broken[0])
+        self.assertIn("Exhibit adds page-wide navigation itself", broken[1])
+        self.assertIn("Emojis in headings, buttons or labels (“🔤 Keyword-Based Retrieval”)", broken[2])
+        # Documents print their tables and get their table of contents from the preset; emojis count everywhere.
+        self.assertEqual(len(MOD._page_rules({"layout": layout}, "document")), 1)
+        self.assertEqual(MOD._page_rules({"errors": []}, "freeform"), [])
+        self.assertIn("1 block of text is drawn in a box", MOD._layout_note({"layout": layout}, "freeform"))
+        self.assertIsNone(MOD._layout_note({"layout": layout}, "document"))
+        self.assertIn("and 2 more", MOD._quote_list(["a", "b", "c", "d", "e"]))
+
+    def test_page_rules_in_a_real_browser(self):
+        if MOD._pdf_browser() is None:
+            self.skipTest("needs Edge or Chrome")
+        os.environ.pop("EXHIBIT_NO_RENDER_CHECK", None)
+        rows = "".join(f"<tr><td>Setup {i}</td><td>{i * 3}</td><td>{i}%</td></tr>" for i in range(1, 4))
+        table = f"<table><tr><th>Setup</th><th>Score</th><th>Share</th></tr>{rows}</table>"
+
+        def refused(**inputs):
+            result = self.call(**{"action": "show", "title": "Rules", **inputs})
+            self.assertFalse(result["success"], result)
+            self.assertEqual(result["error_code"], "page_rules", result)
+            return json.dumps(result, ensure_ascii=False)
+
+        # A new exhibit that breaks a rule isn't created at all.
+        self.assertIn("read-only table of numbers", refused(html=f"<h1>Scores</h1>{table}"))
+        self.assertEqual(MOD._list_exhibits(), [])
+        # An existing one keeps its versions and title.
+        first = self.show(html="<h1>Scores</h1><p>Plain text.</p>")
+        message = refused(html="<h1>Scores</h1>" + table, exhibit_id=first["exhibit_id"], title="Renamed")
+        self.assertIn(f"call show again with exhibit_id {first['exhibit_id']}", message)
+        meta = MOD._load_meta(first["exhibit_id"])
+        self.assertEqual((len(meta["versions"]), meta["title"]), (1, "Test exhibit"))
+        self.assertFalse((MOD._exhibit_dir(first["exhibit_id"]) / "v2.html").exists())
+        # Navigation the page builds for itself: a sticky bar, or a menu of in-page links.
+        sections = "".join(f'<h2 id="s{i}">Part {i}</h2><p>Text.</p>' for i in range(1, 4))
+        self.assertIn("Navigation built into the page",
+                      refused(html='<div style="position:sticky;top:0"><a href="/x">One</a><button>Two</button></div>' + sections))
+        menu = "<ul>" + "".join(f'<li><a href="#s{i}">Part {i}</a></li>' for i in range(1, 4)) + "</ul>"
+        self.assertIn("“Part 1 Part 2 Part 3”", refused(html=menu + sections))
+        self.assertIn("“🧠 Semantic”", refused(html="<h2>🧠 Semantic</h2><p>Text.</p>"))
+        # Allowed: an editable table, media symbols on buttons, a single link to a section, and the presets.
+        editable = table.replace("<td>", "<td contenteditable>")
+        ok = self.show(html=f'<h1>Scores</h1>{editable}<button>▶ Play</button><button>⏸ Pause</button>'
+                            f'<a href="#s1">Jump</a>{sections}')
+        self.assertNotIn("note", ok)
+        for name in ("document", "charts", "slides"):
+            sample = (MOD._PRESET_DIR / f"{name}.html").read_text(encoding="utf-8")
+            self.assertTrue(self.call(action="show", title=f"Sample {name}", html=sample)["success"], name)
+        # Prose in a box is advice, not a refusal.
+        boxed = self.show(html='<h1>Methods</h1><div style="border:1px solid #ccc;padding:12px"><h3>Keyword</h3>'
+                               '<p>' + "Matches memories to the question by the words they share. " * 4 + '</p></div>')
+        self.assertIn("1 block of text is drawn in a box or card (“Keyword Matches memories", boxed["note"])
 
     def test_diagram_notes_from_show(self):
         own = self.show(html='<script src="https://cdn.jsdelivr.net/npm/mermaid@12/dist/mermaid.min.js"></script>'

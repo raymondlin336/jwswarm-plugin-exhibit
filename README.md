@@ -15,6 +15,7 @@ It's a prototype of Claude-style artifacts for WorkSwarm. ("Artifact" already me
   - **Freeform**: a freeform page, such as a dashboard, calculator or tracker.
 
   Documents, slides and charts start from a ready-made page, so they come out consistent and quickly. Freeform pages are written from scratch.
+- **Charts, diagrams and page parts built in.** 17 chart types with editable data, interactive diagrams with step-throughs (flowcharts, sequences, Gantt charts, timelines and more), and ready-made callouts, stat tiles, comparisons and other parts, all in the page's colours, light and dark. Each page is opened and checked before you see it.
 - **The Exhibits Gallery.** Every exhibit with a preview, search, your open exhibits as tabs, and an icon for each exhibit's format. Pin an exhibit to keep it at the top of the gallery and in the Pinned list in the side column.
 - **Versions and saved data.** Every change is a new version you can go back to. Exhibits can save what you enter (ticks, inputs, the slide you were on), and the agent can read it.
 - **Export.** HTML for every exhibit. PDF for documents, slides and charts. Markdown for documents. PNG for charts.
@@ -52,7 +53,7 @@ It's a prototype of Claude-style artifacts for WorkSwarm. ("Artifact" already me
 
 ![A Charts & Graphs exhibit: a budget pie chart with a tooltip, stat tiles below, and the Edit data button in the top bar](docs/charts.webp)
 
-- **Line, area, bar, pie, donut and scatter charts,** drawn by the plugin with Apache ECharts in the page's colours, light and dark.
+- **17 chart types,** drawn by the plugin with Apache ECharts in the page's colours, light and dark: line, area, bar, pie, donut and scatter, plus dot plots, histograms, box plots, heatmaps, calendar heatmaps, waterfalls, funnels, treemaps, sunbursts, sankeys and radar charts. Bars lie sideways by themselves for long labels and stacked data, and value axes show their unit and which way is better.
 - **Stat tiles that update:** totals, averages, highest, lowest, change and growth are worked out from the chart data.
 - **Edit data in the top bar:** opens a panel beside the exhibit with each chart's values. Change values, add or remove rows, drag rows to reorder, or reset. The charts and stats redraw as you type, and edits are saved. Labels stay fixed.
 - **Export:** PDF, or PNG of the whole page.
@@ -61,7 +62,7 @@ It's a prototype of Claude-style artifacts for WorkSwarm. ("Artifact" already me
 
 ![A freeform exhibit: a dashboard of tasks completed per day, with stat tiles, a bar chart and a table](docs/free-form-dashboard.webp)
 
-Anything a single HTML page can do, with the same charts and Edit data panel, libraries from approved CDNs, and saved data.
+Anything a single HTML page can do, with the same charts and Edit data panel, interactive diagrams with step-throughs (flowcharts, sequences, Gantt charts, timelines and more), ready-made page parts (callouts, stat tiles, comparisons, numbered steps and others), pictures the agent draws, libraries from approved CDNs, and saved data. Before a page is shown, Exhibit opens it and tells the agent about anything broken, and it refuses read-only tables of numbers, the page's own navigation menus and emojis in headings.
 
 ## Using exhibits in chat
 

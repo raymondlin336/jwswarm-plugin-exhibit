@@ -1,5 +1,5 @@
 {
-  "version": "0.3.0",
+  "version": "0.4.0",
   "package_type": "plugin",
   "id": "exhibit",
   "name": "Exhibit",
@@ -9,8 +9,8 @@
     "zh": "展品"
   },
   "display_description": {
-    "en": "Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calculators, checklists, forms, charts and small games, opened in a sandboxed browser tab. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back. Exhibits can't reach the internet or your files. Version 0.3.0 prototype.",
-    "zh": "版本 0.3.0 原型。让 WorkSwarm 为你制作展品：可交互的页面，如仪表盘、计算器、清单、表单、图表和小游戏，并在沙盒浏览器标签页中打开。展品会保留各个版本，并能保存你填写的内容，WorkSwarm 可以读回这些内容。展品无法访问互联网或你的文件。"
+    "en": "Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calculators, checklists, forms, charts and small games, opened in a sandboxed browser tab. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back. Exhibits can't reach the internet or your files. Version 0.4.0 prototype.",
+    "zh": "版本 0.4.0 原型。让 WorkSwarm 为你制作展品：可交互的页面，如仪表盘、计算器、清单、表单、图表和小游戏，并在沙盒浏览器标签页中打开。展品会保留各个版本，并能保存你填写的内容，WorkSwarm 可以读回这些内容。展品无法访问互联网或你的文件。"
   },
   "category": "Engineering",
   "source": "local",

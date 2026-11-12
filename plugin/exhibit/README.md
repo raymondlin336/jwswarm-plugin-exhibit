@@ -38,19 +38,26 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 
 ## Updates
 
-### 0.4.0 (in progress)
+### 0.4.0
 
-- **Diagrams:** the agent writes Mermaid text in `<pre class="exhibit-diagram">` and the plugin draws it (flowcharts, sequence and state diagrams, database schemas, mind maps, timelines, architecture and more) in any exhibit format. Some features include:
-  - The page's own colours, light and dark, with one consistent look across all exhibits (a hidden `diagram_look` setting in `ui.json` switches between the "neo" and "classic" looks)
-  - Diagrams fit the page and appear in PDF and PNG exports
-  - A diagram that can't be drawn shows why in its place, and the agent is told about pages that load Mermaid themselves, Mermaid charts that should be real charts, and diagrams with no valid type
-  - Interactive, not static pictures:
-    - Hovering a box highlights it and its connections, and clicking pins it and shows the box's explanation if there is one.
-    - Wide diagrams get zoom buttons and can be dragged around.
-    - A **step-through** (Back, Play, Next, with a caption per step) goes through processes in order. The agent lists the steps; sequence diagrams, timelines, Gantt charts, user journeys and git histories step through automatically. Printed and PDF copies list the steps under the diagram.
-    - This works in every Mermaid diagram type: hovering a mind map branch lights up everything under it, a folder in a tree view its contents, a swimlane or Kanban column its cards.
-    - Pages can drive a diagram from their own controls with `exhibit.diagram("#id")` (highlight, go to a step, react to clicks, redraw).
-- **Faster charts and diagrams:** on first use the plugin downloads its libraries (ECharts, Mermaid, the PNG maker) into `~/.exhibit/lib`, checks each against a fixed fingerprint, and serves them itself. Before this, every chart page downloaded ECharts again on every load, because browsers give sandboxed pages an empty cache. Pages fall back to the CDN while the copy isn't there, and keep working offline once it is.
+- **Added Diagrams tools:** the agent writes Mermaid text in `<pre class="exhibit-diagram">` and the plugin draws it (flowcharts, sequence and state diagrams, database schemas, mind maps, timelines, architecture and more) in any exhibit format. Some features include:
+  - Deterministic framework around it in order to control light / dark mode, styles, and the agent is told about what type of diagrams that can be generated
+  - Encouraged to be interactive whenever appropriate. Hovers, highlights, etc
+- **Added Prebuilt Page Elements:** commonly reused elements of a freeform page, so the agent can quickly put a visually cohesive document together, which matching components, formats, and styles
+  - Callouts, panels, stat tiles, quotes, source lines, captions, tags, side-by-side comparisons, term lists, numbered steps, meta rows, score bars and citations
+  - The agent retains the option to deviate from them if they feel like no prebuilt matches its needs, or if the user requests a change
+- **Improved Charts & Graphs:** 11 new chart types: dot plots, histograms, box plots, heatmaps, calendar heatmaps, waterfalls, funnels, treemaps, sunbursts, sankeys and radar charts. These were always a part of ECharts, but lack of visibility made the agnet ignore them
+  - Added rules that improves how the agent decides to choose between different graphs and charts
+  - All new types work with the Edit Data panel, hover details, and PNG / PDF export
+- **Improved Exhibit Quality:**
+  - Before replying, the agent's exhibit is opened in a hidden browser, and the agent is told about any problems (script errors, diagrams that didn't draw, text too small to read, charts missing axis names, etc), so it can fix them first
+  - The agent now plans what each section should be before writing: plain text by default, charts for numbers, diagrams for processes, Gantt charts / timelines for plans, drawn pictures for physical things, and interactive elements only when there's something to change
+- **Improvements / Bug Fixes:**
+  - Improved problem where unnecessary interactions and steps are added to static information
+  Fixed issue where downloaded modules like ECharts Mermaid are not stored in cache, and diagrams loaded way slower than they should. They should also work offline now
+  - Fixed issue where static UI navigation elements would be generated as part of a freeform artifact
+  - Fixed overlaps and clippings for bar charts
+  - Fixed issue where the agent could accidentally delete parts of an exhibit while fixing a refused one
 
 ### 0.3.0
 

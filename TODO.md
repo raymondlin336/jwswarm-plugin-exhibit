@@ -76,6 +76,27 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
   - [ ] Check in WorkSwarm
 - [x] Local copy of the libraries (0.4.0): ECharts, Mermaid and html-to-image downloaded on first use into `~/.exhibit/lib`, checked by SHA-256, served by the plugin, CDN as the fallback. Sandboxed pages never reuse the browser cache (measured: ECharts re-downloaded on every load in 0.3.0).
   - [ ] Check in WorkSwarm, and in Chrome and Firefox (only headless Edge so far)
+- [x] Page rules and form guidance (0.4.0, 2026-11-12), after the JWMemory capstone (WorkSwarm vs Claude on the same notes) and the Generative UI paper (`notes/generative-ui-paper.md`):
+  - Skill: "Interactive by default" and its table-of-contents line replaced by "Choosing the form" (a one-line plan per section; text by default, charts for numbers, a widget only when the reader has an input to change; no page navigation, no emojis; three short examples). `--card` dropped from the starter CSS.
+  - `show` refuses with `page_rules` and saves nothing: read-only tables of numbers and page-built navigation (freeform only; documents keep printed tables and the preset's contents), emojis in headings, buttons and labels (every format). Prose in a box or card gets a note.
+  - Checked on the capstone pages: WorkSwarm's two are refused (tables, top bar, emojis), and so is Claude's (side menu, two tables).
+  - Capstone rerun on build `fcc83d378b24` (2026-11-12, the user): emojis and page navigation gone, tables no longer overused, no unneeded interaction, better organised. Open: few chart types, and no horizontal bars even for long labels.
+  - [x] Chart kit, same day: 11 more types (dot, histogram, boxplot, heatmap, calendar, waterfall, funnel, treemap, sunburst, sankey, radar), picked by the reader's question (FT Visual Vocabulary); each fits one of four Edit data shapes (grid, slices, pairs, values). Bars lie down by themselves for long or many labels; values below zero take a second colour. The skill's 4-row chooser became a 12-row one. All 17 types drawn in headless Edge, light, dark and 390 px, no errors.
+    - [ ] Edit data on the new types checked in the viewer (only the table shapes were tested, through the kit)
+  - Capstone rerun on build `9181aa828c07` (2026-11-12): fixing the refused nav, the agent ran `sed -i '168,200d'` "to test" and saved a page missing 33 lines; the page it meant (rebuilt from its session) had 9 of 9 bar charts, every chart under a heading repeating its title, a half-width bar chart hiding labels, and three wrong numbers (model reasoning, not checked).
+  - [x] Same day: `show` remembers a refused page's text (by id, file and title) and notes prose missing from the next attempt; the render check notes headings that repeat a chart's title; a bar label fits only with 24 px to spare. Replayed on the capstone attempts: both notes fire where they should.
+  - Tried and reverted the same day (the user's call): notes on pages whose charts are 80% one type, and on paragraphs reciting a chart's numbers. On the next run the agent did switch chart types, but the charts it changed came out poorly.
+  - [ ] Rerun the capstone, M to T and W1 to W10 in WorkSwarm on the new build; measure read-only tables, boxed prose, navigation, emojis, widgets per mechanism and unsupported conclusions; screenshot every page
+- [x] Page parts (0.4.0, 2026-11-12): 13 `ex-` parts designed with the user in `notes/page-parts-preview.html` (square corners, one borderless surface tint, WorkSwarm orange `#ff8821` as the accent with `#b85500` for small text, yellow warnings, hexagon steps after the WorkSwarm mark). Styles added only to pages that use a part, as plain class rules at the top of `<head>` (a cascade layer was tried first, but one `* { padding:0 }` reset flattened the parts); page CSS for a part still wins. The render check doesn't count them as text in a box, and notes page CSS that restyles them and self-numbered reference items. Starter CSS accent is now orange.
+  - [ ] Document and slides presets still use their own blue accent and amber warning; decide whether they move to orange and yellow
+  - [ ] Try in WorkSwarm: does the agent pick parts for their jobs, and keep paragraphs the default? (End-game runs of 2026-11-12: it still builds its own cards for planet profiles, team roles and milestones.)
+- [x] Forms guidance (0.4.0, 2026-11-12): "Choosing the form" names drawn pictures (SVG, labelled, scale stated) and Gantt/timeline schedules, gives what the request asks to see its own section, and has varied examples (water cycle, kitchen renovation, coffee makers) outside the test topics. Charts take `better` and the render check notes unnamed value axes and lone score bars. End-game prompts in the vault note "Exhibit end-game prompts".
+  - First run on build 15:27: the solar system drew its planets and an age slider, the launch plan had a Gantt chart and a saved checklist, nutrition had the protein-vs-calories scatter.
+  - [ ] Gantt styling in the diagram kit: gridlines cross the task labels, bars read as empty outlines, and the red "today" line shows at the edge when today is outside the plan (hide it then; accent-filled bars; gridlines behind labels)
+  - [ ] Render check: overlapping labels in the page's own SVGs (the solar system's inner planets: "MercuryVenusEarth", distances run together); measure text boxes like the small-text check and note collisions
+  - [ ] Skill: `better` only where one direction is clearly better (scores, accuracy, savings: higher; cost, time, errors: lower); none for neutral measures like size, distance or counts (the solar system marked all four "higher is better")
+  - [ ] Run E1–E6 two or three times each, and S1–S3, on the 0.4.0 release; record the range of forms per page
+  - [ ] Try a round on DeepSeek Pro to see how much of what's left is the model (layout of improvised pictures, home-made cards)
 - [ ] UI kit: a small set of ready-made parts for plain HTML, written into the plugin (no CDN, works offline, about 15 to 25 KB), with class names prefixed `ex-` and following the page's color variables.
   - Start with:
     - `exhibit.table(el, rows)`: sortable columns, search past about 15 rows, number formatting, and optional editable cells saved with the exhibit;
@@ -97,6 +118,7 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
   - Into a preset needs the content moved into the preset's structure (the agent fetches the preset page, fills it, saves it). The tool should accept it only if the page really has that structure.
   - Leaving a preset loses the page control and PDF/Markdown export, so the user should confirm in a dialog. Remember the answer for the turn, so retries after a failed save don't ask again.
   - Each version records its preset (already in place), so older versions keep their own controls and exports.
+- [ ] Rethink the formats around freeform (the user's idea, 2026-11-12): the document and Charts & Graphs presets, maybe all presets, may be deprecated. Instead, everything is written as freeform, and a separate module takes the page's components (sections, charts, diagrams, widgets, parts), measures them, and lays them into "molds" with the dimensions of document pages or slides, for export (PDF, deck, document) without locking the exhibit's format. Would also replace preset switching above.
 
 ### Export to traditional file formats
 - [x] Download from the exhibit bar (Export menu), 0.2.2
@@ -105,6 +127,7 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
 - [x] PDF for documents and slides, printed by a hidden Edge or Chrome, 0.2.2
 - [x] Markdown for documents (.md with embedded charts, or .zip with images/), 2026-11-09
 - [ ] Per-preset formats: Word for documents, PowerPoint for slides, Excel / CSV for tables, SVG for charts, PNG / SVG for diagrams (PNG of charts done in 0.3.0)
+- [ ] Per-item rail (the user's idea, 2026-11-12): a small rail on the right of each chart, diagram and widget with Export (PNG, SVG, data), Copy, and Edit (Edit data for a chart, the source for a diagram). The buttons move from the exhibit's top bar, where they depend on the whole page's preset, to the item they act on.
 
 ### Referring to and quoting exhibits
 - [x] Refer to an exhibit in chat (`@exhibit(Name #code)`, Copy reference) so the agent knows which one you mean and can read it, 0.2.2
@@ -126,6 +149,11 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
   - Raise the page size limit to allow for embedded photos (2 MB now).
   - Finding the photo stays with the agent (`fetch_webpage`, search); the plugin only embeds it safely.
 - [ ] A built-in look: theme variables and Chart.js defaults injected by the tool, charts that redraw when the theme changes
+- [ ] Self-made visuals follow the style guide (2026-11-12): the agent's own SVGs, drawings and widgets use the page's font, readable sizes, the theme colours (accent, muted, line) and work in light and dark, like the kits do. Candidates: a small style block for the agent's SVG (font, text fill, stroke), skill lines, and render-check notes for text that's hard to see (low contrast, too small) in the page's own drawings.
+- [ ] Speed (2026-11-12):
+  - [ ] The Exhibits Gallery is laggy (many live thumbnails?); measure what's slow first
+  - [ ] Some interactive elements flash repeatedly while a value changes (sliders, inputs) instead of updating smoothly: likely whole charts or sections redrawn on every input event; find whether it's the kit (`exhibit.chart` called again per input) or the agent's code, then update in place or throttle
+- [ ] Test on a stronger model (2026-11-12): run the end-game prompts (E1–E6, S1–S3) and the capstone on DeepSeek Pro or similar, to separate what's left that's the model (layout of improvised pictures, home-made cards, reasoning errors) from what's Exhibit's
 - [ ] Concrete design rules in the skill (lead with the answer, summarize before plotting, show each fact once)
 - [ ] In-app preview: a script-free snapshot in WorkSwarm's artifact panel with an "Open exhibit" link
 

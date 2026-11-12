@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page parts preview</title>
+<style>
+/* The page's own colours, as the Exhibit skill's starter CSS defines them. */
+/* Accent: WorkSwarm's logo orange (#ff8821, from the logo the Exhibits rail shows) for fills and shapes.
+   --accent-ink is the same hue deep enough for small text on white (4.8:1); in dark mode the logo orange reads fine. */
+:root { --bg:#ffffff; --fg:#1d1d1b; --muted:#6b6b66; --line:#e2e2dc; --accent:#ff8821; --accent-ink:#b85500; }
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#1b1b1a; --fg:#ecece8; --muted:#a3a39c; --line:#3a3a37; --accent:#ff8821; --accent-ink:#ff8821; }
+}
+body { background:var(--bg); color:var(--fg); font:16px/1.65 system-ui, "Segoe UI", sans-serif; margin:0; }
+main { max-width:760px; margin:0 auto; padding:32px 20px 80px; }
+.demo-h { font:600 12px/1 system-ui; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:56px 0 6px; }
+.demo-why { font-size:14px; color:var(--muted); margin:0 0 16px; }
+h1 { font-size:28px; margin:0 0 6px; }
+
+/* ---------- The proposed parts. Everything sits in one layer, so any CSS the agent writes wins. ---------- */
+@layer exhibit-parts {
+  :root {
+    --ex-radius: 0; --ex-pad: 14px 18px;  /* square corners throughout (the user's call, 2026-11-12) */
+    --ex-soft: color-mix(in srgb, var(--fg) 5.5%, var(--bg));  /* the one surface tint: panels and stat tiles, no borders */
+    --ex-good: #16a34a; --ex-warn: #eab308; --ex-warn-ink: #a16207; --ex-bad: #dc2626;  /* warning is yellow, so it never looks like the orange accent */
+  }
+  @media (prefers-color-scheme: dark) { :root { --ex-good:#4ade80; --ex-warn:#facc15; --ex-warn-ink:#facc15; --ex-bad:#f87171; } }
+
+  /* 1. Callout */
+  .ex-callout { --c: var(--accent); --ink: var(--accent-ink); margin:20px 0; padding:var(--ex-pad); border-left:3px solid var(--c);
+    background:color-mix(in srgb, var(--c) 7%, var(--bg)); }
+  .ex-callout.ex-warn { --c: var(--ex-warn); --ink: var(--ex-warn-ink); } .ex-callout.ex-good { --c: var(--ex-good); --ink: var(--ex-good); } .ex-callout.ex-bad { --c: var(--ex-bad); --ink: var(--ex-bad); }
+  .ex-callout > :first-child { margin-top:0; } .ex-callout > :last-child { margin-bottom:0; }
+  /* A callout with a heading and a list: key takeaways, a short summary. */
+  .ex-callout > h4 { margin:0 0 6px; font-size:13px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink); }
+  .ex-callout ol, .ex-callout ul { margin:0; padding-left:22px; } .ex-callout li { margin:5px 0; }
+
+  /* 2. Panel: a short set of items */
+  .ex-panel { margin:20px 0; padding:var(--ex-pad); border-radius:var(--ex-radius); background:var(--ex-soft); }
+  .ex-panel > h4 { margin:0 0 8px; font-size:15px; }
+  .ex-panel ul { margin:0; padding-left:20px; } .ex-panel li { margin:4px 0; }
+
+  /* 3. Stat tiles */
+  .ex-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; margin:20px 0; }
+  .ex-stat { padding:14px 16px; border-radius:var(--ex-radius); background:var(--ex-soft); }
+  .ex-stat .ex-label { display:block; font-size:13px; color:var(--muted); }
+  .ex-stat b { display:block; font-size:28px; line-height:1.2; margin:4px 0 2px; font-variant-numeric:tabular-nums; }
+  .ex-stat small { font-size:12px; color:var(--muted); }
+
+  /* 4. Quote */
+  .ex-quote { margin:24px 0; padding:0 0 0 20px; border-left:2px solid var(--line); font:italic 19px/1.55 Georgia, "Times New Roman", serif; }
+  .ex-quote cite { display:block; margin-top:8px; font:normal 13px system-ui, sans-serif; color:var(--muted); }
+  .ex-quote cite::before { content:"— "; }
+
+  /* 5. Source line */
+  .ex-source { font-size:13px; color:var(--muted); margin:-8px 0 16px; }
+  .ex-source::before { content:"Source: "; }
+
+  /* 6. Tags */
+  .ex-tag { --c: var(--muted); display:inline-block; padding:1px 8px; border-radius:var(--ex-radius); font-size:12.5px; line-height:1.6;
+    color:color-mix(in srgb, var(--c) 80%, var(--fg)); background:color-mix(in srgb, var(--c) 13%, var(--bg)); white-space:nowrap; }
+  .ex-tag.ex-accent { --c: var(--accent); color:var(--accent-ink); } .ex-tag.ex-good { --c: var(--ex-good); } .ex-tag.ex-warn { --c: var(--ex-warn); color:var(--ex-warn-ink); } .ex-tag.ex-bad { --c: var(--ex-bad); }
+
+  /* 7. Comparison */
+  .ex-compare { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:24px; margin:20px 0; }
+  .ex-compare > div > h4 { margin:0 0 6px; font-size:15px; padding-bottom:6px; border-bottom:2px solid var(--line); }
+  .ex-compare .ex-plus > h4 { border-color:var(--ex-good); } .ex-compare .ex-minus > h4 { border-color:var(--ex-bad); }
+  .ex-compare ul { margin:0; padding-left:20px; } .ex-compare li { margin:4px 0; }
+
+  /* 8. Term list */
+  .ex-terms { display:grid; grid-template-columns:max-content 1fr; gap:6px 18px; margin:20px 0; }
+  .ex-terms dt { font-weight:600; } .ex-terms dd { margin:0; color:var(--muted); }
+
+  /* 9. Numbered steps */
+  .ex-steps { list-style:none; counter-reset:step; margin:20px 0; padding:0; }
+  /* Each number sits in a hexagon with a dot on every corner (after the WorkSwarm mark); the shape is a
+     mask over the accent colour, so it follows the theme. A thin line joins the steps. */
+  /* Whole-pixel line heights, so every row starts on a whole pixel and the number (snapped to pixels)
+     stays centred in the hexagon (which isn't): with 26.4 px lines, step 2 sat half a pixel low. */
+  .ex-steps li { counter-increment:step; position:relative; padding:2px 0 16px 46px; line-height:26px; }
+  .ex-steps li::before { content:counter(step); position:absolute; left:0; top:-2px; width:32px; height:32px;
+    line-height:32px; text-align:center; font-size:13px; font-weight:700; font-variant-numeric:tabular-nums; color:var(--accent); }
+  .ex-steps li::after { content:""; position:absolute; left:0; top:-2px; width:32px; height:32px; background:var(--accent);
+    -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='16,3.5 26.8,9.75 26.8,22.25 16,28.5 5.2,22.25 5.2,9.75' fill='none' stroke='black' stroke-width='1.5'/%3E%3Cg fill='black'%3E%3Ccircle cx='16' cy='3.5' r='2.4'/%3E%3Ccircle cx='26.8' cy='9.75' r='2.4'/%3E%3Ccircle cx='26.8' cy='22.25' r='2.4'/%3E%3Ccircle cx='16' cy='28.5' r='2.4'/%3E%3Ccircle cx='5.2' cy='22.25' r='2.4'/%3E%3Ccircle cx='5.2' cy='9.75' r='2.4'/%3E%3C/g%3E%3C/svg%3E") center/contain no-repeat;
+    mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon points='16,3.5 26.8,9.75 26.8,22.25 16,28.5 5.2,22.25 5.2,9.75' fill='none' stroke='black' stroke-width='1.5'/%3E%3Cg fill='black'%3E%3Ccircle cx='16' cy='3.5' r='2.4'/%3E%3Ccircle cx='26.8' cy='9.75' r='2.4'/%3E%3Ccircle cx='26.8' cy='22.25' r='2.4'/%3E%3Ccircle cx='16' cy='28.5' r='2.4'/%3E%3Ccircle cx='5.2' cy='22.25' r='2.4'/%3E%3Ccircle cx='5.2' cy='9.75' r='2.4'/%3E%3C/g%3E%3C/svg%3E") center/contain no-repeat; }
+  .ex-steps li:not(:last-child) { background:linear-gradient(var(--line), var(--line)) 15.25px 34px / 1.5px calc(100% - 36px) no-repeat; }
+  .ex-steps b { display:block; }
+
+  /* 10. Meta row */
+  .ex-meta { display:flex; flex-wrap:wrap; gap:4px 18px; margin:8px 0 20px; font-size:14px; color:var(--muted); padding:0; list-style:none; }
+  .ex-meta b { color:var(--fg); font-weight:600; }
+
+  /* 11. Inline score bar */
+  .ex-score { display:grid; grid-template-columns:minmax(120px, 34%) 1fr max-content; align-items:center; gap:10px; margin:6px 0; font-size:14px; }
+  .ex-score .ex-track { height:8px; border-radius:var(--ex-radius); background:var(--ex-soft); border:1px solid var(--line); overflow:hidden; }
+  .ex-score .ex-fill { height:100%; background:var(--accent); }
+  .ex-score span:last-child { font-variant-numeric:tabular-nums; color:var(--muted); }
+
+  /* 12. Caption under a figure */
+  .ex-caption { font-size:13px; color:var(--muted); margin:6px 0 20px; }
+
+  /* 13. Citations */
+  .ex-cite { font-size:11px; vertical-align:super; line-height:0; color:var(--accent-ink); text-decoration:none; padding:0 1px; }
+  .ex-refs { font-size:13px; color:var(--muted); border-top:1px solid var(--line); margin-top:28px; padding:10px 0 0 20px; }
+  .ex-refs li { margin:3px 0; }
+}
+.fake-figure { height:120px; border:1px dashed var(--line); border-radius:8px; display:grid; place-items:center; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Page parts preview</h1>
+<p style="color:var(--muted);margin:0">Proposed Exhibit modules, filled with content from the JWMemory capstone. Each one follows the page's colours, in light and dark.</p>
+
+<!-- 1 -->
+<p class="demo-h">1. Callout (default, warning, with a list)</p>
+<p class="demo-why">The finding the reader must not miss, at most one per section. With a heading and a list, it's also the key takeaways.</p>
+<div class="ex-callout"><p><b>Turning off JWMemory's default reranker improved results.</b> Combining each method's own ranking put 66 of 72 key facts in front of the agent, against 55 with the word-count reranker.</p></div>
+<div class="ex-callout ex-warn"><p><b>Graph retrieval can't run out of the box.</b> Nothing calls the step that links memories, so the graph stays empty.</p></div>
+<p class="ex-source">5A. Retrieval Fixes</p>
+<div class="ex-callout">
+  <h4>Key takeaways</h4>
+  <ol>
+    <li>Semantic search carries the pipeline; keyword helps less.</li>
+    <li>The placeholder reranker hurts: switching it off took key facts reaching the agent from 55 to 66.</li>
+    <li>Graph retrieval took the most effort and gave nothing yet.</li>
+  </ol>
+</div>
+
+<!-- 2 -->
+<p class="demo-h">2. Panel</p>
+<p class="demo-why">A short set of related items, like your first screenshot.</p>
+<div class="ex-panel">
+  <h4>Problems found across all tests</h4>
+  <ul>
+    <li><b>Top 5 retrieval in Code mode is broken:</b> the search index gets an empty folder path on the English layout.</li>
+    <li><b>Hard-coded 5-second timeout:</b> Hindsight's memories never arrived until it was raised to 60.</li>
+    <li><b>The default reranker is a word-count placeholder.</b></li>
+  </ul>
+</div>
+
+<!-- 3 -->
+<p class="demo-h">3. Stat tiles</p>
+<p class="demo-why">Two to four headline numbers, like your third screenshot.</p>
+<div class="ex-stats">
+  <div class="ex-stat"><span class="ex-label">Keyword linker (default)</span><b>6</b><small>of 72 in the top 5</small></div>
+  <div class="ex-stat"><span class="ex-label">Keyword linker (fixed)</span><b>36</b><small>of 72 in the top 5</small></div>
+  <div class="ex-stat"><span class="ex-label">LLM linker</span><b>5</b><small>of 72 in the top 5</small></div>
+</div>
+
+<!-- 4 -->
+<p class="demo-h">4. Quote</p>
+<p class="demo-why">A real quotation and who said it.</p>
+<blockquote class="ex-quote">Why is there no time for memory retrieval in the latency graph?<cite>Victor, on the JWMem vs Hindsight results</cite></blockquote>
+
+<!-- 5 -->
+<p class="demo-h">5. Source line</p>
+<p class="demo-why">Where a finding came from, under the thing it belongs to (see under the callouts above).</p>
+<p>Semantic search alone found 69 of 72 key facts in the top 30.</p>
+<p class="ex-source">5A. Retrieval Fixes, each retrieval method tested alone</p>
+
+<!-- 6 -->
+<p class="demo-h">6. Tags</p>
+<p class="demo-why">Short labels. Colours carry meaning (neutral, accent, good, warning, bad), not decoration.</p>
+<p>
+  <span class="ex-tag">Keyword</span> <span class="ex-tag ex-accent">Semantic</span>
+  <span class="ex-tag ex-good">Working</span> <span class="ex-tag ex-warn">Chinese only</span> <span class="ex-tag ex-bad">Off by default</span>
+</p>
+<p>Temporal retrieval in JWMemory <span class="ex-tag ex-warn">Chinese only</span> measures time from today's real date.</p>
+
+<!-- 7 -->
+<p class="demo-h">7. Comparison</p>
+<p class="demo-why">Two or three things side by side. Stacks on a phone.</p>
+<div class="ex-compare">
+  <div class="ex-plus"><h4>Strengths</h4><ul><li>Finds paraphrases: "pet" finds "beagle"</li><li>Strongest single method: 69 of 72 in the top 30</li></ul></div>
+  <div class="ex-minus"><h4>Weaknesses</h4><ul><li>Needs an embedding model</li><li>Two versions of the same fact look equally relevant</li></ul></div>
+</div>
+<div class="ex-compare">
+  <div><h4>JWMemory</h4><ul><li>Reranks its top 60 results</li><li>Word-count reranker</li><li>Graph off</li></ul></div>
+  <div><h4>Hindsight</h4><ul><li>Reranks up to 300</li><li>Cross-encoder (MiniLM)</li><li>All four methods on</li></ul></div>
+</div>
+
+<!-- 8 -->
+<p class="demo-h">8. Term list</p>
+<p class="demo-why">Abbreviations and terms the page uses.</p>
+<dl class="ex-terms">
+  <dt>IE</dt><dd>Information extraction</dd>
+  <dt>MR</dt><dd>Multi-session reasoning</dd>
+  <dt>KU</dt><dd>Knowledge updates</dd>
+  <dt>Method II</dt><dd>Scripted conversations replayed into the memory system</dd>
+</dl>
+
+<!-- 9 -->
+<p class="demo-h">9. Numbered steps</p>
+<p class="demo-why">A simple order that doesn't need a diagram.</p>
+<ol class="ex-steps">
+  <li><b>Retrieve</b>Each method returns its own top candidates.</li>
+  <li><b>Rerank</b>A reranker scores the combined pool against the question.</li>
+  <li><b>Cut</b>The top results go into the agent's prompt.</li>
+</ol>
+
+<!-- 10 -->
+<p class="demo-h">10. Meta row</p>
+<p class="demo-why">Small facts under a title.</p>
+<ul class="ex-meta"><li><b>Model</b> deepseek-v4-flash</li><li><b>Benchmark</b> LongMemEval</li><li><b>Questions</b> 29 to 40</li><li><b>JWSwarm</b> v0.2.7</li></ul>
+
+<!-- 11 -->
+<p class="demo-h">11. Inline score bar</p>
+<p class="demo-why">A number's size at a glance, inside text or a list, without a full chart.</p>
+<div class="ex-score"><span>Semantic alone</span><div class="ex-track"><div class="ex-fill" style="width:96%"></div></div><span>69 / 72</span></div>
+<div class="ex-score"><span>Keyword alone</span><div class="ex-track"><div class="ex-fill" style="width:74%"></div></div><span>53 / 72</span></div>
+<div class="ex-score"><span>Graph, LLM linker</span><div class="ex-track"><div class="ex-fill" style="width:19%"></div></div><span>14 / 72</span></div>
+
+<!-- 12 -->
+<p class="demo-h">12. Caption</p>
+<p class="demo-why">The small note under a chart or diagram.</p>
+<div class="fake-figure">(a chart)</div>
+<p class="ex-caption">Temporal can't be tested alone: it filters by date rather than ranking memories.</p>
+
+<!-- 13 -->
+<p class="demo-h">13. Citations</p>
+<p class="demo-why">Numbered references instead of a "Source:" line after every paragraph.</p>
+<p>The default reranker only counts words the question shares with each memory<a class="ex-cite" href="#r1">1</a>, and JWMemory reranks only its top 60 results<a class="ex-cite" href="#r2">2</a>.</p>
+<ol class="ex-refs"><li id="r1">6. Some Found Problems (Across All Tests)</li><li id="r2">5A. Retrieval Fixes</li></ol>
+</main>
+</body>
+</html>

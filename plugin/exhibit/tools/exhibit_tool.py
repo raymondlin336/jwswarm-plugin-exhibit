@@ -89,13 +89,17 @@ _CHARTS_NEXT = (
 )
 _FREEFORM_NEXT = (
     "Freeform: write the page yourself, following the exhibit instructions, then call show with it. "
-    "For line, area, bar, pie, donut and scatter charts, call exhibit.chart(element, spec), e.g. "
+    "For charts, call exhibit.chart(element, spec), picking the type from the reader's question (the table under "
+    "Charts: line, bar, dot, histogram, boxplot, heatmap, calendar, waterfall, pie, treemap, sunburst, funnel, "
+    "sankey, radar, scatter), e.g. "
     'exhibit.chart("#sales", {type: "line", x: ["Jan", "Feb"], series: {North: [42, 45]}}). '
     "Don't load Chart.js, ECharts or another chart library for these: exhibit.chart adds hover details, "
     "zooming and theme colors, and the user edits its data with the Edit data button in the exhibit's top bar. "
     "The kit saves those edits itself: pass it "
-    "the original data and use onChange to update the rest of the page. Don't add a table that repeats a chart's "
-    "data: the chart shows it, and Edit data edits it. "
+    "the original data and use onChange to update the rest of the page. "
+    "Plan each section's form first (see \"Choosing the form\"): plain paragraphs by default, charts for numbers, "
+    "a widget only where the reader has an input to change. show fails on read-only tables of numbers, "
+    "navigation bars or section menus, and emojis in headings or labels. "
     "For flowcharts, sequence, state and other boxes-and-arrows diagrams, write Mermaid text in "
     "<pre class=\"exhibit-diagram\">...</pre>; Exhibit draws it and makes it interactive. When it shows an order "
     "(a process, a flow through systems, state changes), add %% step lines for a step-through (see the exhibit "
@@ -1129,7 +1133,10 @@ def _preset_problem(page: str, kind: str) -> str | None:
     return None
 
 
-_CHART_TYPES = ("line", "area", "bar", "pie", "donut", "scatter")
+_CHART_TYPES = ("line", "area", "bar", "pie", "donut", "scatter", "histogram", "boxplot", "dot", "heatmap",
+                "calendar", "waterfall", "funnel", "treemap", "sunburst", "sankey", "radar")
+_DATA_CHART_TYPES = ("pie", "donut", "funnel", "treemap", "sunburst", "sankey", "calendar")  # "data": {"Label": number}
+_STAT_CHART_TYPES = ("line", "area", "bar", "pie", "donut")
 _CHARTS_BLOCK_RE = re.compile(
     r'<script\b[^>]*\bid=["\']exhibit-charts["\'][^>]*>(.*?)</script\s*>', re.IGNORECASE | re.DOTALL)
 
@@ -1152,7 +1159,7 @@ def _charts_problem(body: str) -> str | None:
         kind = chart.get("type", "line")
         if kind not in _CHART_TYPES:
             return f'chart {number} has type {kind!r}; it must be one of {", ".join(_CHART_TYPES)}'
-        if kind in ("pie", "donut"):
+        if kind in _DATA_CHART_TYPES:
             if not chart.get("data") and not (chart.get("x") and chart.get("series")):
                 return f'chart {number} ({kind}) has no data: give "data": {{"Label": number, ...}}'
         elif not chart.get("series"):
@@ -1177,8 +1184,9 @@ def _stats_problem(stats: Any, charts: list[Any]) -> str | None:
         if chart is None:
             return (f'stat {number} ({stat["label"]!r}) names chart {stat.get("chart")!r}, which isn\'t in "charts": '
                     f'use one of their ids ({", ".join(ids)})')
-        if chart.get("type", "line") == "scatter":
-            return f'stat {number} ({stat["label"]!r}) uses a scatter chart; stats work on line, area, bar, pie and donut charts'
+        if chart.get("type", "line") not in _STAT_CHART_TYPES:
+            return (f'stat {number} ({stat["label"]!r}) uses a {chart.get("type")} chart; stats work on line, area, bar, '
+                    'pie and donut charts')
         if stat.get("value") not in _STAT_VALUES:
             return f'stat {number} ({stat["label"]!r}) has value {stat.get("value")!r}; it must be one of {", ".join(_STAT_VALUES)}'
         series = stat.get("series")
@@ -1274,6 +1282,21 @@ def _save_version(
         meta["updated"] = _now()
         _atomic_write(folder / "meta.json", json.dumps(meta, indent=1))
         return meta, version
+
+
+def _undo_version(exhibit_id: str, version: int, meta_before: bytes | None) -> None:
+    """Take a version back out after show refused it: the page file goes, and so does the whole exhibit
+    when this version created it; otherwise meta.json goes back to what it was (title included)."""
+    with _store_lock:
+        folder = _exhibit_dir(exhibit_id)
+        if meta_before is None:
+            shutil.rmtree(folder, ignore_errors=True)
+            return
+        try:
+            (folder / f"v{version}.html").unlink()
+        except FileNotFoundError:
+            pass
+        _atomic_write_bytes(folder / "meta.json", meta_before)
 
 
 def _list_exhibits() -> list[dict[str, Any]]:
@@ -2394,7 +2417,260 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     if (Array.isArray(raw) && spec.x) return spec.x.map((name, i) => ({ name: String(name), value: raw[i] }));
     return [];
   };
-  const TYPES = ["line", "area", "bar", "pie", "donut", "scatter"];
+  // 0.4.0, after the capstone rerun: six types left the agent with bars or a table for data that was
+  // really a distribution, a gap between two values, a grid or a flow. These follow the questions in
+  // the FT's Visual Vocabulary. Each one's data is one of four table shapes, so Edit data, onChange and
+  // saved edits work the same: grid (labels x series), slices (label: value, with shares), pairs
+  // (label: value, no shares) and values (a series' raw numbers, one per row).
+  const TYPES = ["line", "area", "bar", "pie", "donut", "scatter", "histogram", "boxplot", "dot", "heatmap",
+    "calendar", "waterfall", "funnel", "treemap", "sunburst", "sankey", "radar"];
+  const SHAPE = { pie: "slices", donut: "slices", funnel: "slices", treemap: "slices", sunburst: "slices",
+    sankey: "pairs", calendar: "pairs", scatter: "points", histogram: "values", boxplot: "values" };
+  const shapeOf = (type) => SHAPE[type] || "grid";
+  const nums = (list) => (Array.isArray(list) ? list : []).filter((v) => v !== null && v !== "" && isFinite(v)).map(Number);
+  const mix = (a, b, p) => { const x = rgb(a), y = rgb(b); return "rgb(" + x.map((v, i) => Math.round(v + (y[i] - v) * p)).join(",") + ")"; };
+  const quantile = (sorted, q) => { const pos = (sorted.length - 1) * q, lo = Math.floor(pos), hi = Math.ceil(pos); return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo); };
+  const linkOf = (label) => { const p = String(label).split(/\s*(?:→|->)\s*/); return p.length === 2 && p[0] && p[1] ? { source: p[0], target: p[1] } : null; };
+  // "Group / Item": value pairs as a tree, for treemap and sunburst; plain labels are top-level items.
+  const treeOf = (pairs) => {
+    const root = [];
+    pairs.forEach(({ name, value }) => {
+      const path = String(name).split(/\s+\/\s+/);
+      let level = root;
+      path.forEach((part, i) => {
+        let node = level.find((n) => n.name === part);
+        if (!node) { node = { name: part }; level.push(node); }
+        if (i === path.length - 1) node.value = value;
+        else level = node.children || (node.children = []);
+      });
+    });
+    return root;
+  };
+  const heatColors = (t) => [mix(t.bg, t.palette[0], 0.06), mix(t.bg, t.palette[0], 0.45), t.palette[0]];
+  // Charts whose rows run down the page get as tall as their rows need (the given height is a minimum).
+  const heightFor = (spec, el) => {
+    const type = spec.type || "line", title = spec.title ? 52 : 0;
+    let n = 0;
+    try { n = seriesOf(spec).length; } catch (e) {}
+    const x = Array.isArray(spec.x) ? spec.x.length : 0;
+    if (type === "bar" && lying(spec, el)) {
+      // Each row needs room for its bar(s) and a label; the legend and axis names come on top of that.
+      const groups = spec.stack ? 1 : Math.min(4, n || 1);
+      return x * (groups * 14 + 22) + title + 34 + (n > 1 ? 28 : 0) + (spec.yLabel ? 24 : 0) + (spec.xLabel ? 18 : 0);
+    }
+    if (type === "dot") return x * 30 + title + (n > 1 ? 28 : 0) + 50;
+    if (type === "heatmap") return n * 32 + title + 90;
+    if (type === "boxplot" && lying({ type: "bar", x: seriesOf(spec).map((s) => s.name), horizontal: spec.horizontal }, el)) return n * 48 + title + 60;
+    if (type === "calendar") {
+      const years = new Set(sliceData(spec).map((d) => String(d.name).slice(0, 4)));
+      return years.size * 150 + title + 60;
+    }
+    if (type === "sankey") return Math.max(360, new Set(sliceData(spec).flatMap((d) => { const l = linkOf(d.name); return l ? [l.source, l.target] : []; })).size * 26);
+    return 0;
+  };
+  // The new types' chart options. base: title and colours; tip: the tooltip look; top: space for the title.
+  const special = (type, spec, t, el, base, tip, top) => {
+    const legend = (show) => ({ show, type: "scroll", top: spec.title ? 36 : 0, textStyle: { color: t.fg }, pageTextStyle: { color: t.muted }, icon: "circle", itemGap: 16 });
+    const axisLine = { lineStyle: { color: t.line } };
+    const value = (extra) => ({ type: "value", splitLine: { lineStyle: { color: t.line, type: "dashed" } }, axisLabel: { color: t.muted, formatter: (v) => number(v, spec, true) }, nameTextStyle: { color: t.muted }, ...extra });
+    const category = (data, extra) => ({ type: "category", data, axisLine, axisTick: { show: false }, axisLabel: { color: t.muted }, nameTextStyle: { color: t.muted }, ...extra });
+    const fmt = (v) => esc(number(v, spec));
+    if (type === "histogram" || type === "boxplot") {
+      const series = seriesOf(spec).map((s) => ({ name: s.name, data: nums(s.data) })).filter((s) => s.data.length);
+      if (!series.length) throw new Error("A " + type + ' chart needs each series\' raw values, e.g. series: {"Response time": [1.2, 3.4, 2.2, ...]}; the kit works out the ' + (type === "histogram" ? "bins" : "quartiles"));
+      base.color = colorsFor(spec, t, series.map((s) => s.name));
+      if (type === "histogram") {
+        const all = series.flatMap((s) => s.data), lo = Math.min(...all), hi = Math.max(...all);
+        const want = spec.bins || Math.min(30, Math.max(5, Math.ceil(Math.log2(all.length) + 1)));
+        const rough = (hi - lo) / want || 1, mag = Math.pow(10, Math.floor(Math.log10(rough)));
+        const width = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((w) => w >= rough * 0.999);
+        const start = Math.floor(lo / width) * width, bins = Math.max(1, Math.floor((hi - start) / width) + 1);
+        const labels = Array.from({ length: bins }, (_, i) => number(start + i * width, { ...spec, suffix: "" }, true) + "–" + number(start + (i + 1) * width, { ...spec, prefix: "" }, true));
+        return {
+          ...base, legend: legend(series.length > 1),
+          tooltip: { ...tip, trigger: "axis", axisPointer: { type: "shadow" } },
+          grid: { left: 4, right: 18, top: top + (series.length > 1 ? 28 : 8), bottom: 4, containLabel: true },
+          xAxis: category(labels, { name: spec.xLabel, axisLabel: { color: t.muted, hideOverlap: true } }),
+          yAxis: value({ name: spec.yLabel || "Count", minInterval: 1, axisLabel: { color: t.muted } }),
+          series: series.map((s) => {
+            const counts = new Array(bins).fill(0);
+            s.data.forEach((v) => { counts[Math.min(bins - 1, Math.floor((v - start) / width + 1e-9))] += 1; });
+            return { name: s.name, type: "bar", data: counts, barCategoryGap: series.length > 1 ? "20%" : "3%", itemStyle: { borderRadius: [3, 3, 0, 0] } };
+          }),
+        };
+      }
+      const names = series.map((s) => s.name), side = lying({ type: "bar", x: names, horizontal: spec.horizontal }, el);
+      const boxes = [], outliers = [];
+      series.forEach((s, i) => {
+        const v = [...s.data].sort((a, b) => a - b), q1 = quantile(v, 0.25), q3 = quantile(v, 0.75), iqr = q3 - q1;
+        const inside = v.filter((x) => x >= q1 - 1.5 * iqr && x <= q3 + 1.5 * iqr);
+        boxes.push({ value: [inside[0], q1, quantile(v, 0.5), q3, inside[inside.length - 1]], count: v.length, itemStyle: { color: mix(t.bg, base.color[i % base.color.length], 0.25), borderColor: base.color[i % base.color.length], borderWidth: 1.5 } });
+        v.filter((x) => !inside.includes(x)).forEach((x) => outliers.push(side ? [x, i] : [i, x]));
+      });
+      const at = category(names, side ? { inverse: true } : { axisLabel: { color: t.muted, hideOverlap: true } });
+      return {
+        ...base,
+        tooltip: { ...tip, trigger: "item", formatter: (p) => { if (p.seriesType !== "boxplot") return "Outlier: <b>" + fmt(side ? p.value[0] : p.value[1]) + "</b>";
+          const b = boxes[p.dataIndex], v = b.value;
+          return "<b>" + esc(names[p.dataIndex]) + "</b> (" + b.count + " values)<br>Highest (no outliers): " + fmt(v[4]) + "<br>Upper quartile: " + fmt(v[3]) + "<br>Median: <b>" + fmt(v[2]) + "</b><br>Lower quartile: " + fmt(v[1]) + "<br>Lowest (no outliers): " + fmt(v[0]); } },
+        grid: { left: 4, right: 18, top: top + 8, bottom: 4, containLabel: true },
+        xAxis: side ? value({ name: spec.yLabel, scale: true }) : at,
+        yAxis: side ? at : value({ name: spec.yLabel, scale: true }),
+        series: [{ type: "boxplot", data: boxes, boxWidth: [12, 40] }, { type: "scatter", name: "Outliers", data: outliers, symbolSize: 6, itemStyle: { color: t.muted } }],
+      };
+    }
+    if (type === "funnel" || type === "treemap" || type === "sunburst" || type === "sankey" || type === "calendar") {
+      const pairs = sliceData(spec);
+      if (!pairs.length) throw new Error({
+        funnel: 'A funnel needs data in stage order, e.g. {"Visited": 1200, "Signed up": 300, "Paid": 45}',
+        treemap: 'A treemap needs data, e.g. {"Rent": 1500, "Food / Groceries": 400, "Food / Eating out": 200} ("Group / Item" nests)',
+        sunburst: 'A sunburst needs data, e.g. {"Food / Groceries": 400, "Food / Eating out": 200, "Rent": 1500} ("Group / Item" nests)',
+        sankey: 'A sankey needs links, e.g. {"Visitors → Sign-up": 300, "Sign-up → Paid": 45}',
+        calendar: 'A calendar needs dates, e.g. {"2026-03-01": 4, "2026-03-02": 7}',
+      }[type]);
+      if (type === "funnel") {
+        base.color = colorsFor(spec, t, pairs.map((d) => d.name));
+        return {
+          ...base,
+          tooltip: { ...tip, trigger: "item", formatter: (p) => p.marker + esc(p.name) + "<br><b>" + fmt(p.value) + "</b>" + (p.dataIndex ? " &nbsp;" + Math.round(p.value / pairs[0].value * 100) + "% of the first" : "") },
+          series: [{ type: "funnel", data: pairs, sort: "none", top: top + 8, bottom: 8, left: "8%", width: "84%", minSize: "8%", gap: 3,
+            label: { show: true, position: "inside", color: "#fff", formatter: (p) => p.name + "  " + number(p.value, spec, true) },
+            itemStyle: { borderColor: t.bg, borderWidth: 1 } }],
+        };
+      }
+      if (type === "treemap" || type === "sunburst") {
+        const tree = treeOf(pairs), colors = colorsFor(spec, t, tree.map((n) => n.name));
+        const paint = (node, color, depth, k) => {
+          node.itemStyle = { color: depth ? mix(color, t.bg, Math.min(0.45, 0.12 * depth + 0.06 * (k % 3))) : color };
+          (node.children || []).forEach((c, j) => paint(c, color, depth + 1, j));
+        };
+        tree.forEach((n, i) => paint(n, colors[i % colors.length], 0, 0));
+        const total = pairs.reduce((s, d) => s + (Number(d.value) || 0), 0);
+        const tooltip = { ...tip, trigger: "item", formatter: (p) => { const v = Number(p.value) || 0; return esc((p.treePathInfo || []).slice(1).map((x) => x.name).join(" / ") || p.name) + "<br><b>" + fmt(v) + "</b>" + (total ? " &nbsp;" + (v / total * 100).toFixed(1) + "%" : ""); } };
+        if (type === "treemap") return {
+          ...base, tooltip,
+          series: [{ type: "treemap", data: tree, top: top + 8, left: 2, right: 2, bottom: tree.some((n) => n.children) ? 30 : 2, roam: false, nodeClick: "zoomToNode",
+            breadcrumb: { show: tree.some((n) => n.children), bottom: 2, itemStyle: { color: t.card, borderColor: t.line, textStyle: { color: t.fg } } },
+            label: { show: true, color: "#fff", formatter: (p) => p.name + "\n" + number(p.value, spec, true), overflow: "truncate" },
+            itemStyle: { borderColor: t.bg, borderWidth: 2, gapWidth: 2 },
+            // levels[0] is the hidden root; groups (level 1) get their name in a strip along the top.
+            levels: [{ itemStyle: { borderColor: t.bg, borderWidth: 0, gapWidth: 3 } },
+              { itemStyle: { borderColor: t.bg, borderWidth: 3, gapWidth: 1 }, upperLabel: { show: tree.some((n) => n.children), height: 22, color: t.fg, fontWeight: 600, backgroundColor: t.bg } },
+              { itemStyle: { borderColor: t.bg, borderWidth: 1, gapWidth: 1 } }] }],
+        };
+        return {
+          ...base, tooltip,
+          series: [{ type: "sunburst", data: tree, center: ["50%", (top + (el.clientHeight - top) / 2) / Math.max(1, el.clientHeight) * 100 + "%"], radius: ["14%", "88%"], sort: undefined,
+            itemStyle: { borderColor: t.bg, borderWidth: 2 }, label: { color: "#fff", minAngle: 8, overflow: "truncate", width: 90 },
+            emphasis: { focus: "ancestor" } }],
+        };
+      }
+      if (type === "sankey") {
+        const links = pairs.map((d) => { const l = linkOf(d.name); if (!l) throw new Error('Each sankey link is written "From → To": value; "' + d.name + '" has no arrow'); return { ...l, value: d.value }; });
+        const names = [...new Set(links.flatMap((l) => [l.source, l.target]))], colors = colorsFor(spec, t, names);
+        return {
+          ...base,
+          tooltip: { ...tip, trigger: "item", formatter: (p) => p.dataType === "edge" ? esc(p.data.source) + " → " + esc(p.data.target) + "<br><b>" + fmt(p.value) + "</b>" : esc(p.name) + "<br><b>" + fmt(p.value) + "</b>" },
+          series: [{ type: "sankey", top: top + 8, bottom: 8, left: 4, right: Math.min(160, Math.max(...names.map(textWidth)) + 16), nodeGap: 12, nodeWidth: 14, draggable: false, nodeAlign: "left",
+            data: names.map((n, i) => ({ name: n, itemStyle: { color: colors[i % colors.length], borderWidth: 0 } })), links,
+            label: { color: t.fg }, lineStyle: { color: "gradient", opacity: 0.35, curveness: 0.5 }, emphasis: { focus: "adjacency", lineStyle: { opacity: 0.6 } } }],
+        };
+      }
+      // calendar
+      const days = pairs.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d.name)));
+      if (!days.length) throw new Error('A calendar needs dates written YYYY-MM-DD, e.g. {"2026-03-01": 4}');
+      const years = [...new Set(days.map((d) => d.name.slice(0, 4)))].sort(), vals = nums(days.map((d) => d.value));
+      const dates = days.map((d) => d.name).sort(), first = dates[0].slice(0, 7) + "-01", last = dates[dates.length - 1];
+      const end = (() => { const d = new Date(last.slice(0, 7) + "-01T00:00:00Z"); d.setUTCMonth(d.getUTCMonth() + 1); d.setUTCDate(0); return d.toISOString().slice(0, 10); })();
+      // Each year runs from the first to the last month with data, so a few months don't sit in an empty year.
+      const range = (y) => [y + "-01-01" < first ? first : y + "-01-01", y + "-12-31" > end ? end : y + "-12-31"];
+      const lo = Math.min(0, ...vals), hi = Math.max(...vals);
+      return {
+        ...base,
+        tooltip: { ...tip, trigger: "item", formatter: (p) => esc(p.value[0]) + "<br><b>" + fmt(p.value[1]) + "</b>" },
+        visualMap: { min: lo, max: hi, orient: "horizontal", left: "center", bottom: 0, itemHeight: 120, calculable: false, text: [number(hi, spec, true), number(lo, spec, true)], inRange: { color: heatColors(t) }, textStyle: { color: t.muted } },
+        calendar: years.map((y, k) => ({ range: range(y), top: top + 24 + k * 150, left: 34, right: 8, cellSize: ["auto", 15],
+          itemStyle: { color: mix(t.bg, t.fg, 0.04), borderColor: t.bg, borderWidth: 2 }, splitLine: { show: false },
+          dayLabel: { color: t.muted, firstDay: 1, nameMap: ["S", "M", "T", "W", "T", "F", "S"] }, monthLabel: { color: t.muted }, yearLabel: { color: t.muted } })),
+        series: years.map((y, k) => ({ type: "heatmap", coordinateSystem: "calendar", calendarIndex: k, data: days.filter((d) => d.name.startsWith(y)).map((d) => [d.name, d.value]) })),
+      };
+    }
+    // grid types: x labels with one value per series
+    const series = seriesOf(spec);
+    if (!series.length) throw new Error("A " + type + ' chart needs series, e.g. {"North": [42, 45, ...]} with x labels');
+    const n = Math.max(...series.map((s) => s.data.length));
+    const x = (spec.x || Array.from({ length: n }, (_, i) => i + 1)).map(String);
+    base.color = colorsFor(spec, t, series.map((s) => s.name));
+    if (type === "heatmap") {
+      const cells = [], vals = [];
+      series.forEach((s, r) => x.forEach((_, c) => { const v = s.data[c]; if (v !== null && v !== undefined && v !== "" && isFinite(v)) { cells.push([c, r, Number(v)]); vals.push(Number(v)); } }));
+      const column = (el.clientWidth || 640) * 0.7 / Math.max(1, x.length), roomy = column > 34;
+      const lo = spec.min !== undefined ? spec.min : Math.min(...vals), hi = spec.max !== undefined ? spec.max : Math.max(...vals);
+      return {
+        ...base,
+        tooltip: { ...tip, trigger: "item", formatter: (p) => esc(series[p.value[1]].name) + " · " + esc(x[p.value[0]]) + "<br><b>" + fmt(p.value[2]) + "</b>" },
+        grid: { left: 4, right: 8, top: top + 8, bottom: 44, containLabel: true },
+        // Column labels wrap under each other when there's room, and slant when columns are narrow (phones).
+        xAxis: category(x, { position: "top", axisLabel: column >= 64 ? { color: t.muted, interval: 0, overflow: "break", width: column - 6 } : { color: t.muted, interval: 0, rotate: 40, overflow: "truncate", width: 110 }, splitArea: { show: false } }),
+        yAxis: category(series.map((s) => s.name), { inverse: true }),
+        visualMap: { min: lo, max: hi, orient: "horizontal", left: "center", bottom: 0, itemHeight: 120, calculable: false, text: [number(hi, spec, true), number(lo, spec, true)],
+          inRange: { color: heatColors(t) }, textStyle: { color: t.muted } },
+        series: [{ type: "heatmap", data: cells, itemStyle: { borderColor: t.bg, borderWidth: 2, borderRadius: 3 },
+          label: { show: roomy, formatter: (p) => number(p.value[2], spec, true), color: t.fg, fontSize: 11 }, emphasis: { itemStyle: { borderColor: t.fg, borderWidth: 1 } } }],
+      };
+    }
+    if (type === "radar") {
+      const top3 = (i) => Math.max(...series.map((s) => Number(s.data[i]) || 0));
+      // The web sits in the space under the title and legend, with room for the axis names around it.
+      const h = el.clientHeight || 360, w = el.clientWidth || 640, above = top + (series.length > 1 ? 28 : 8) + 18;
+      const room = Math.max(60, Math.min(h - above - 22, w * 0.7) / 2);
+      return {
+        ...base, legend: legend(series.length > 1),
+        tooltip: { ...tip, trigger: "item", formatter: (p) => p.marker + esc(p.name) + "<br>" + x.map((name, i) => esc(name) + ": <b>" + fmt(p.value[i]) + "</b>").join("<br>") },
+        radar: { indicator: x.map((name, i) => ({ name, max: spec.max !== undefined ? spec.max : (top3(i) || 1) * 1.1 })), center: ["50%", above + room], radius: room,
+          axisName: { color: t.fg }, splitLine: { lineStyle: { color: t.line } }, splitArea: { show: false }, axisLine: { lineStyle: { color: t.line } } },
+        series: [{ type: "radar", symbolSize: 5, data: series.map((s) => ({ name: s.name, value: s.data.map((v) => (v === null || v === undefined ? 0 : v)), areaStyle: { opacity: 0.12 }, lineStyle: { width: 2 } })),
+          emphasis: { focus: "series" } }],
+      };
+    }
+    if (type === "dot") {
+      // One row per item, a dot per series, joined from the lowest to the highest: the gap between them.
+      const spans = x.map((_, i) => { const v = nums(series.map((s) => s.data[i])); return v.length ? [Math.min(...v), Math.max(...v), i] : null; }).filter(Boolean);
+      return {
+        ...base, legend: legend(series.length > 1),
+        tooltip: { ...tip, trigger: "axis", axisPointer: { type: "line", lineStyle: { color: t.line } }, formatter: (ps) => { const i = ps[0] && (ps[0].seriesType === "custom" ? ps[0].value[2] : ps[0].value[1]); return "<b>" + esc(x[i]) + "</b><br>" + series.map((s, k) => '<span style="color:' + base.color[k % base.color.length] + '">●</span> ' + esc(s.name) + ": <b>" + (s.data[i] === null || s.data[i] === undefined ? "–" : fmt(s.data[i])) + "</b>").join("<br>"); } },
+        grid: { left: 4, right: 18, top: top + (series.length > 1 ? 28 : 8), bottom: 4, containLabel: true },
+        xAxis: value({ name: spec.yLabel, scale: spec.min === undefined, min: spec.min, max: spec.max }),
+        yAxis: category(x, { inverse: true, axisLabel: { color: t.muted, width: Math.max(90, (el.clientWidth || 640) * 0.32), overflow: "break" }, axisPointer: { type: "shadow" } }),
+        series: [
+          { type: "custom", silent: true, z: 1, data: spans, encode: { x: [0, 1], y: 2 }, tooltip: { show: false },
+            renderItem: (params, api) => { const a = api.coord([api.value(0), api.value(2)]), b = api.coord([api.value(1), api.value(2)]); return { type: "line", shape: { x1: a[0], y1: a[1], x2: b[0], y2: b[1] }, style: { stroke: t.line, lineWidth: 3 } }; } },
+          ...series.map((s, k) => ({ name: s.name, type: "scatter", z: 2, symbolSize: 11, color: base.color[k % base.color.length], data: x.map((_, i) => (s.data[i] === null || s.data[i] === undefined || s.data[i] === "" ? null : [Number(s.data[i]), i])).filter(Boolean),
+            itemStyle: { borderColor: t.bg, borderWidth: 1.5 }, emphasis: { focus: "series" } })),
+        ],
+      };
+    }
+    // waterfall: each value is a change; the last bar is the running total unless total: false
+    const changes = series[0].data.map((v) => Number(v) || 0), labels = [...x], steps = [];
+    let run = 0;
+    changes.forEach((c, i) => { steps.push([i, run, run + c, c, 0]); run += c; });  // 5 values each: the 5th marks the total
+    if (spec.total !== false) { labels.push(spec.totalLabel || "Total"); steps.push([steps.length, 0, run, run, 1]); }
+    const up = spec.colors && spec.colors.up || "#27ae60", down = spec.colors && spec.colors.down || "#eb5757", sum = spec.colors && spec.colors.total || t.palette[0];
+    return {
+      ...base,
+      tooltip: { ...tip, trigger: "item", formatter: (p) => "<b>" + esc(labels[p.value[0]]) + "</b><br>" + (p.value[4] ? "Total: <b>" + fmt(p.value[3]) + "</b>" : (p.value[3] >= 0 ? "+" : "") + fmt(p.value[3]) + " &nbsp;→ " + fmt(p.value[2])) },
+      grid: { left: 4, right: 18, top: top + 8, bottom: 4, containLabel: true },
+      xAxis: category(labels, { axisLabel: { color: t.muted, interval: 0, overflow: "break", width: Math.max(50, (el.clientWidth || 640) * 0.9 / labels.length) } }),
+      yAxis: value({ name: spec.yLabel }),
+      series: [{ type: "custom", data: steps, encode: { x: 0, y: [1, 2] },
+        renderItem: (params, api) => {
+          const lo = api.coord([api.value(0), Math.min(api.value(1), api.value(2))]), hi = api.coord([api.value(0), Math.max(api.value(1), api.value(2))]);
+          const w = api.size([1, 0])[0] * 0.62, total = api.value(4) === 1;
+          return { type: "rect", shape: { x: lo[0] - w / 2, y: hi[1], width: w, height: Math.max(1, lo[1] - hi[1]), r: 3 },
+            style: { fill: total ? sum : api.value(3) >= 0 ? up : down } };
+        } }],
+    };
+  };
   // colors: a list, one color, or colors by series (or slice) name; anything not given takes the theme's.
   const colorsFor = (spec, t, names) => {
     const c = spec.colors, valid = (v) => typeof v === "string" && v.trim() !== "";
@@ -2407,17 +2683,72 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     }
     return t.palette;
   };
-  const build = (spec, t, el) => {
+  // Bar orientation (0.4.0, JWMemory capstone rerun: every bar chart stood up, even 9 long labels under
+  // 9 bars). Unless the spec says, bars lie down with the labels on the left when the labels are long or
+  // there are many named categories (the usual charting advice): a label that doesn't fit under its bar,
+  // 7+ categories with labels past about 9 characters, or any label past about 16. Short labels in an
+  // order (months, years, quarters) keep standing bars.
+  let measurer = null;
+  const textWidth = (text) => {
+    measurer = measurer || document.createElement("canvas").getContext("2d");
+    measurer.font = "12px " + (getComputedStyle(document.body || document.documentElement).fontFamily || "sans-serif");
+    return measurer.measureText(String(text)).width;
+  };
+  const lying = (spec, el) => {
+    if ((spec.type || "line") !== "bar") return false;
+    if (spec.horizontal !== undefined) return !!spec.horizontal;
+    // Stacked bars (one bar split into segments) always lie down: segments compare more easily along a
+    // row, and the segment labels and totals have room (the user's call, 2026-11-12).
+    try { if (spec.stack && seriesOf(spec).length > 1) return true; } catch (e) {}
+    const x = spec.x;
+    if (!Array.isArray(x) || !x.length) return false;
+    const per = (el.clientWidth || 640) / x.length, longest = Math.max(...x.map(textWidth));
+    // A label "fits" only with room to spare: ECharts hides labels that come closer than that.
+    return longest + 24 > per || (x.length >= 7 && longest > 60) || longest > 100;
+  };
+  // Axis names stay inside the chart (2026-11-12: a y-axis name was cut at the left edge, and on sideways
+  // bars the value axis name ran off the right end). The bottom axis's name sits centred under its labels,
+  // a side axis's name sits above the axis, running right from it; the grid makes room for both.
+  const placeNames = (option) => {
+    if (!option || !option.grid) return option;
+    const x = option.xAxis, y = option.yAxis;
+    if (x && !Array.isArray(x) && x.name) {
+      Object.assign(x, { nameLocation: "middle", nameGap: 28 });
+      option.grid.bottom = (option.grid.bottom || 0) + 24;
+    }
+    if (y && !Array.isArray(y) && y.name) {
+      Object.assign(y, { nameLocation: y.inverse ? "start" : "end", nameGap: 12, nameTextStyle: { ...(y.nameTextStyle || {}), align: "left" } });
+      option.grid.top = (option.grid.top || 0) + 18;
+    }
+    return option;
+  };
+  // Which way is good (2026-11-12, the user's call): better: "higher" or "lower" adds that to the value
+  // axis's name, with an arrow pointing the good way ("Facts found (of 72) · ↑ higher is better").
+  const direction = (option, spec) => {
+    const better = String(spec.better || "").toLowerCase();
+    if (!option || !option.grid || (better !== "higher" && better !== "lower")) return option;
+    const axis = [option.yAxis, option.xAxis].find((a) => a && !Array.isArray(a) && a.type === "value");
+    if (!axis) return option;
+    const up = axis === option.yAxis, arrow = better === "higher" ? (up ? "↑" : "→") : (up ? "↓" : "←");
+    axis.name = (axis.name ? axis.name + "  ·  " : "") + arrow + " " + better + " is better";
+    return option;
+  };
+  // Charts with a value axis: the render check asks for its name (with units) when there is none.
+  const VALUE_AXIS = ["line", "area", "bar", "scatter", "boxplot", "dot", "waterfall"];
+  const build = (spec, t, el) => placeNames(direction(buildOption(spec, t, el), spec));
+  const buildOption = (spec, t, el) => {
     const type = spec.type || "line";
     if (!TYPES.includes(type)) throw new Error('type must be one of: ' + TYPES.join(", ") + ' (got "' + type + '")');
     const calm = !!window.__exhibitCalm;
     const tip = { backgroundColor: t.card, borderColor: t.line, textStyle: { color: t.fg }, confine: true, extraCssText: "box-shadow:0 4px 16px rgba(0,0,0,.15);border-radius:8px;" };
-    const top = spec.title ? 36 : 4;
+    // Titles are centred, with room to breathe: title, a gap, the legend, a gap, then the chart (2026-11-12).
+    const top = spec.title ? 48 : 4;
     const base = {
       animation: !calm, animationDuration: 600, color: t.palette, aria: { enabled: true },
       textStyle: { color: t.muted, fontFamily: t.font },
-      title: spec.title ? { text: spec.title, left: 0, top: 0, textStyle: { color: t.fg, fontSize: 15, fontWeight: 600 } } : undefined,
+      title: spec.title ? { text: spec.title, left: "center", top: 2, textStyle: { color: t.fg, fontSize: 15, fontWeight: 600 } } : undefined,
     };
+    if (TYPES.indexOf(type) > 5) return special(type, spec, t, el, base, tip, top);
     if (type === "pie" || type === "donut") {
       const data = sliceData(spec);
       if (!data.length) throw new Error("A " + type + " chart needs data, e.g. {Rent: 96000, Travel: 31000} or x + one series");
@@ -2443,14 +2774,23 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     if (!series.length) throw new Error("A " + type + " chart needs series, e.g. {North: [42, 45, ...]}");
     base.color = colorsFor(spec, t, series.map((s) => s.name));
     const x = spec.x || (type === "scatter" ? null : series[0].data.map((_, i) => i + 1));
-    const horizontal = type === "bar" && !!spec.horizontal;
+    const horizontal = lying(spec, el);
     const many = x ? x.length : Math.max(...series.map((s) => s.data.length));
-    const zoom = spec.zoom === undefined ? many > 24 : !!spec.zoom;
-    const category = { type: "category", data: x, boundaryGap: type === "bar", axisLine: { lineStyle: { color: t.line } }, axisTick: { show: false }, axisLabel: { color: t.muted, hideOverlap: true }, name: spec.xLabel, nameTextStyle: { color: t.muted } };
+    const zoom = spec.zoom === undefined ? many > 24 && !horizontal : !!spec.zoom;
+    const category = { type: "category", data: x, boundaryGap: type === "bar", axisLine: { lineStyle: { color: t.line } }, axisTick: { show: false },
+      // Upright bars wrap their labels under each bar rather than hiding the ones that overlap
+      // (2026-11-12: a page forced horizontal: false on long labels, and half of them disappeared).
+      axisLabel: horizontal ? { color: t.muted, width: Math.max(90, (el.clientWidth || 640) * 0.32), overflow: "break" }
+        : type === "bar" && x && (el.clientWidth || 640) * 0.9 / x.length >= 44
+          ? { color: t.muted, interval: 0, width: (el.clientWidth || 640) * 0.9 / x.length - 8, overflow: "break" }
+          : { color: t.muted, hideOverlap: true },
+      name: spec.xLabel, nameTextStyle: { color: t.muted } };
     const value = { type: "value", scale: type === "scatter", splitLine: { lineStyle: { color: t.line, type: "dashed" } }, axisLabel: { color: t.muted, formatter: (v) => number(v, spec, true) }, name: spec.yLabel, nameTextStyle: { color: t.muted } };
+    // For each bar, the last series with a value above zero: its segment is the bar's outer end.
+    const outer = (x || []).map((_, i) => { let last = -1; series.forEach((s, k) => { if (Number(s.data[i]) > 0) last = k; }); return last; });
     return {
       ...base,
-      legend: { show: series.length > 1, type: "scroll", top: spec.title ? 26 : 0, textStyle: { color: t.fg }, pageTextStyle: { color: t.muted }, icon: "circle", itemGap: 16 },
+      legend: { show: series.length > 1, type: "scroll", top: spec.title ? 36 : 0, textStyle: { color: t.fg }, pageTextStyle: { color: t.muted }, icon: "circle", itemGap: 16 },
       tooltip: type === "scatter"
         ? { ...tip, trigger: "item", formatter: (p) => {  // both coordinates, named after the axes
             const [px, py] = Array.isArray(p.value) ? p.value : [p.dataIndex, p.value];
@@ -2462,8 +2802,15 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
       xAxis: type === "scatter" ? { ...value, name: spec.xLabel } : (horizontal ? value : category),
       yAxis: horizontal ? { ...category, inverse: true } : value,
       dataZoom: zoom ? [{ type: "inside" }, { type: "slider", height: 18, bottom: 8, borderColor: t.line, textStyle: { color: t.muted }, brushSelect: false }] : [],
-      series: series.map((s) => ({
-        name: s.name, data: s.data, type: type === "area" ? "line" : type,
+      series: series.map((s, k) => ({
+        // A single bar series with values below zero: those bars take a second colour (above vs below).
+        // Stacked bars: only the outermost segment of each bar is rounded. Rounding every segment left a
+        // notch wherever one segment sat on the next (the user's screenshot, 2026-11-12).
+        name: s.name, type: type === "area" ? "line" : type,
+        data: type === "bar" && spec.stack && series.length > 1
+          ? s.data.map((v, i) => ({ value: v, itemStyle: { borderRadius: k === outer[i] ? (horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0]) : 0 } }))
+          : type === "bar" && series.length === 1 && s.data.some((v) => Number(v) < 0)
+          ? s.data.map((v) => (Number(v) < 0 ? { value: v, itemStyle: { color: base.color[1], borderRadius: horizontal ? [4, 0, 0, 4] : [0, 0, 4, 4] } } : v)) : s.data,
         smooth: (type === "line" || type === "area") ? spec.smooth !== false : undefined,
         symbol: "circle", symbolSize: type === "scatter" ? 9 : 6, showSymbol: type === "scatter" || many <= 24,
         lineStyle: { width: 2.5 }, areaStyle: type === "area" ? { opacity: 0.15 } : undefined,
@@ -2473,6 +2820,17 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
         blur: { lineStyle: { opacity: 0.15 }, itemStyle: { opacity: 0.2 }, areaStyle: { opacity: 0.04 } },
       })),
     };
+  };
+  // After spec.options are merged: if they moved the legend (2026-11-12: a page set legend.top to 30 on
+  // charts with no title, so the legend sat on the plot), the plot starts below it, or ends above it.
+  const settle = (option) => {
+    const legend = option && option.legend, grid = option && option.grid;
+    if (!legend || Array.isArray(legend) || legend.show === false || !grid || Array.isArray(grid)) return option;
+    const px = (v) => (typeof v === "number" ? v : typeof v === "string" && /^\d+(px)?$/.test(v.trim()) ? parseFloat(v) : null);
+    const top = px(legend.top), bottom = px(legend.bottom);
+    if (top !== null) grid.top = Math.max(px(grid.top) || 0, top + 28 + (option.yAxis && option.yAxis.name && option.yAxis.nameLocation === "end" ? 18 : 0));
+    else if (bottom !== null) grid.bottom = Math.max(px(grid.bottom) || 0, bottom + 30);
+    return option;
   };
   const merge = (a, b) => {  // the escape hatch: spec.options merged over the kit's settings
     if (Array.isArray(b) || typeof b !== "object" || b === null) return b;
@@ -2484,24 +2842,26 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     el.innerHTML = '<div style="padding:14px 16px;border:1px dashed currentColor;border-radius:8px;opacity:.75;font:13px/1.5 system-ui,sans-serif">' + esc(text) + "</div>";
   };
   const table = (el, spec) => {  // the data, readable, when ECharts can't be loaded
-    const pie = spec.type === "pie" || spec.type === "donut";
     let html = '<p style="font:12px system-ui,sans-serif;opacity:.7;margin:0 0 6px">The interactive chart couldn\'t load (no internet?). Here is its data.</p><table style="border-collapse:collapse;font:13px system-ui,sans-serif">';
-    if (pie) html += sliceData(spec).map((d) => "<tr><td style='padding:3px 12px 3px 0'>" + esc(d.name) + "</td><td style='text-align:right'>" + esc(number(d.value, spec)) + "</td></tr>").join("");
-    else {
-      const series = seriesOf(spec), x = spec.x || [];
-      html += "<tr><th></th>" + series.map((s) => "<th style='padding:3px 12px;text-align:right'>" + esc(s.name) + "</th>").join("") + "</tr>";
-      html += (x.length ? x : series[0].data.map((_, i) => i + 1)).map((label, i) => "<tr><td style='padding:3px 12px 3px 0'>" + esc(label) + "</td>" + series.map((s) => "<td style='padding:3px 12px;text-align:right'>" + esc(number(s.data[i], spec)) + "</td>").join("") + "</tr>").join("");
-    }
+    try {
+      const t = toTable(spec), cell = "padding:3px 12px;text-align:right";
+      html += "<tr><th style='padding:3px 12px 3px 0;text-align:left'>" + esc(t.head || "") + "</th>" + t.cols.map((c) => "<th style='" + cell + "'>" + esc(c) + "</th>").join("") + "</tr>";
+      html += t.rows.map((r) => "<tr><td style='padding:3px 12px 3px 0'>" + esc(r.label) + "</td>" + r.values.map((v) => "<td style='" + cell + "'>" + esc(number(v, spec)) + "</td>").join("") + "</tr>").join("");
+    } catch (e) {}
     el.innerHTML = html + "</table>";
   };
   // A chart's data as a table, for the viewer's Edit data panel: every chart has one, whatever its
   // size (spec.table is ignored). Edits redraw the chart, call spec.onChange(data), and are kept in
   // the exhibit's saved data under "chart-data:<id>".
   const toTable = (spec) => {
-    const type = spec.type || "line";
-    if (type === "pie" || type === "donut")
-      return { kind: "slices", head: spec.xLabel || "Category", cols: [spec.yLabel || "Value"], rows: sliceData(spec).map((d) => ({ label: d.name, values: [d.value] })) };
+    const type = spec.type || "line", shape = shapeOf(type);
+    if (shape === "slices" || shape === "pairs")
+      return { kind: shape, head: spec.xLabel || { sankey: "Link (From → To)", calendar: "Date", funnel: "Stage" }[type] || "Category",
+        cols: [spec.yLabel || "Value"], rows: sliceData(spec).map((d) => ({ label: d.name, values: [d.value] })) };
     const series = seriesOf(spec);
+    if (shape === "values")
+      return { kind: "values", head: "Series", cols: [spec.yLabel || "Value"],
+        rows: series.flatMap((s) => nums(s.data).map((v) => ({ label: s.name, values: [v] }))) };
     if (type === "scatter")
       return { kind: "points", head: "Series", cols: [spec.xLabel || "x", spec.yLabel || "y"],
         rows: series.flatMap((s) => s.data.map((p) => ({ label: s.name, values: Array.isArray(p) ? [p[0], p[1]] : [null, p] }))) };
@@ -2511,7 +2871,12 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
       rows: x.map((label, i) => ({ label: String(label), values: series.map((s) => (s.data[i] === undefined ? null : s.data[i])) })) };
   };
   const fromTable = (t) => {
-    if (t.kind === "slices") return { data: t.rows.map((r) => ({ name: r.label, value: r.values[0] })), series: undefined, x: undefined };
+    if (t.kind === "slices" || t.kind === "pairs") return { data: t.rows.map((r) => ({ name: r.label, value: r.values[0] })), series: undefined, x: undefined };
+    if (t.kind === "values") {
+      const groups = new Map();
+      t.rows.forEach((r) => { if (!groups.has(r.label)) groups.set(r.label, []); groups.get(r.label).push(r.values[0]); });
+      return { series: [...groups].map(([name, data]) => ({ name, data })), data: undefined };
+    }
     if (t.kind === "points") {
       const groups = new Map();
       t.rows.forEach((r) => { if (!groups.has(r.label)) groups.set(r.label, []); groups.get(r.label).push([r.values[0], r.values[1]]); });
@@ -2521,7 +2886,12 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
   };
   // What onChange and data() give the page: the same shapes the skill teaches for the spec.
   const plainData = (t) => {
-    if (t.kind === "slices") return Object.fromEntries(t.rows.map((r) => [r.label, r.values[0]]));
+    if (t.kind === "slices" || t.kind === "pairs") return Object.fromEntries(t.rows.map((r) => [r.label, r.values[0]]));
+    if (t.kind === "values") {
+      const out = {};
+      t.rows.forEach((r) => { (out[r.label] = out[r.label] || []).push(r.values[0]); });
+      return out;
+    }
     if (t.kind === "points") {
       const out = {};
       t.rows.forEach((r) => { (out[r.label] = out[r.label] || []).push([r.values[0], r.values[1]]); });
@@ -2608,9 +2978,18 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     const nested = changing > 0;  // called from an onChange: don't call onChange back
     live.set(el, ticket);
     const current = () => live.get(el) === ticket;
-    if (!el.style.height && el.clientHeight < 40) el.style.height = (spec.height || 360) + "px";
     if (!el.style.width) el.style.width = "100%";
+    if (!el.style.height && el.clientHeight < 40) {
+      let need = 0;
+      try { need = heightFor(spec, el); } catch (e) {}
+      el.style.height = (spec.height ? Math.max(spec.height, need) : need || 360) + "px";
+    }
     const original = { ...spec };
+    // What the render check reads: each chart's title (for the note on a heading that repeats it).
+    try {
+      const info = window.__exhibitChartInfo || (window.__exhibitChartInfo = new Map());
+      info.set(el, { title: spec.title || "", unnamed: VALUE_AXIS.includes(spec.type || "line") && !String(spec.yLabel || "").trim() });
+    } catch (e) {}
     let editable = false;
     try { toTable(spec); editable = true; } catch (e) {}  // every chart whose data reads as a table
     const key = "chart-data:" + (spec.id || el.id || "chart-" + index);
@@ -2632,9 +3011,9 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
       let option;
       try { option = build(spec, theme(el), el); } catch (err) { message(el, "Chart error: " + err.message); console.error("exhibit.chart:", err); return null; }
       const inst = echarts.init(el, null, { renderer: "svg" });
-      inst.setOption(spec.options ? merge(option, spec.options) : option);
+      inst.setOption(settle(spec.options ? merge(option, spec.options) : option));
       const entry = { el, spec, inst, index };
-      entry.draw = () => inst.setOption(merge(build(entry.spec, theme(el), el), entry.spec.options || {}), true);
+      entry.draw = () => inst.setOption(settle(merge(build(entry.spec, theme(el), el), entry.spec.options || {})), true);
       charts.add(entry);
       // Pie labels show only on charts at least 420 px wide, so a resize across that width redraws.
       entry.wide = el.clientWidth >= 420;
@@ -2671,6 +3050,72 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
 
 def _uses_chart_kit(page: str) -> bool:
     return "exhibit.chart(" in page
+
+
+# Page parts (0.4.0, 2026-11-12): ready-made styles for the things agents kept building by hand, each
+# time differently (four capstone pages: .card, .finding, .method-card, .callout, .stat-box, .tag-*).
+# Designed with the user in notes/page-parts-preview.html: square corners, one borderless surface tint,
+# WorkSwarm's orange as the accent, yellow for warnings. Added only to pages that use an ex- part, at
+# the top of <head>, as plain class rules: a page's blanket reset (* { padding:0 }, li { ... }) is less
+# specific and loses, while the page's own rules for a part come later and win, so agents (and users
+# who ask) can restyle a part with its variables or their own CSS. (A cascade layer was tried first:
+# layered rules lose to every unlayered rule, so one * reset flattened the steps and lists.) Pages
+# without the theme variables get working fallbacks.
+_PARTS_CLASS = re.compile(r"""class\s*=\s*["'](?:[^"']*\s)?ex-(?:callout|panel|stats|stat|quote|source|tag|compare|terms|steps|meta|score|caption|cite|refs)\b""", re.I)
+_HEXAGON = ("url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpolygon "
+            "points='16,3.5 26.8,9.75 26.8,22.25 16,28.5 5.2,22.25 5.2,9.75' fill='none' stroke='black' stroke-width='1.5'/%3E"
+            "%3Cg fill='black'%3E%3Ccircle cx='16' cy='3.5' r='2.4'/%3E%3Ccircle cx='26.8' cy='9.75' r='2.4'/%3E%3Ccircle "
+            "cx='26.8' cy='22.25' r='2.4'/%3E%3Ccircle cx='16' cy='28.5' r='2.4'/%3E%3Ccircle cx='5.2' cy='22.25' r='2.4'/%3E"
+            "%3Ccircle cx='5.2' cy='9.75' r='2.4'/%3E%3C/g%3E%3C/svg%3E\") center/contain no-repeat")
+_PARTS_STYLE = """<style data-exhibit-kit="parts">
+:root { --ex-accent:var(--accent, #ff8821); --ex-ink:var(--accent-ink, var(--accent, #b85500));
+  --ex-fg:var(--fg, CanvasText); --ex-bg:var(--bg, Canvas); --ex-muted:var(--muted, color-mix(in srgb, var(--ex-fg) 62%, var(--ex-bg)));
+  --ex-line:var(--line, color-mix(in srgb, var(--ex-fg) 16%, var(--ex-bg)));
+  --ex-radius:0; --ex-pad:14px 18px; --ex-soft:color-mix(in srgb, var(--ex-fg) 5.5%, var(--ex-bg));
+  --ex-good:#16a34a; --ex-warn:#eab308; --ex-warn-ink:#a16207; --ex-bad:#dc2626; }
+@media (prefers-color-scheme: dark) { :root { --ex-good:#4ade80; --ex-warn:#facc15; --ex-warn-ink:#facc15; --ex-bad:#f87171; } }
+.ex-callout { --c:var(--ex-accent); --ink:var(--ex-ink); margin:20px 0; padding:var(--ex-pad); border-left:3px solid var(--c); background:color-mix(in srgb, var(--c) 7%, var(--ex-bg)); }
+.ex-callout.ex-warn { --c:var(--ex-warn); --ink:var(--ex-warn-ink); } .ex-callout.ex-good { --c:var(--ex-good); --ink:var(--ex-good); } .ex-callout.ex-bad { --c:var(--ex-bad); --ink:var(--ex-bad); }
+.ex-callout > :first-child { margin-top:0; } .ex-callout > :last-child { margin-bottom:0; }
+.ex-callout > h4 { margin:0 0 6px; font-size:13px; letter-spacing:.05em; text-transform:uppercase; color:var(--ink); }
+.ex-callout ol, .ex-callout ul { margin:0; padding-left:22px; } .ex-callout li { margin:5px 0; }
+.ex-panel { margin:20px 0; padding:var(--ex-pad); border-radius:var(--ex-radius); background:var(--ex-soft); }
+.ex-panel > h4 { margin:0 0 8px; font-size:15px; } .ex-panel ul, .ex-panel ol { margin:0; padding-left:20px; } .ex-panel li { margin:4px 0; }
+.ex-stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; margin:20px 0; }
+.ex-stat { padding:14px 16px; border-radius:var(--ex-radius); background:var(--ex-soft); }
+.ex-stat .ex-label { display:block; font-size:13px; color:var(--ex-muted); }
+.ex-stat b { display:block; font-size:28px; line-height:1.2; margin:4px 0 2px; font-variant-numeric:tabular-nums; }
+.ex-stat small { font-size:12px; color:var(--ex-muted); }
+.ex-quote { margin:24px 0; padding:0 0 0 20px; border-left:2px solid var(--ex-line); font:italic 19px/1.55 Georgia, "Times New Roman", serif; }
+.ex-quote cite { display:block; margin-top:8px; font:normal 13px system-ui, sans-serif; color:var(--ex-muted); } .ex-quote cite::before { content:"— "; }
+.ex-source { font-size:13px; color:var(--ex-muted); margin:-8px 0 16px; } .ex-source::before { content:"Source: "; }
+.ex-tag { --c:var(--ex-muted); display:inline-block; padding:1px 8px; border-radius:var(--ex-radius); font-size:12.5px; line-height:1.6; white-space:nowrap;
+  color:color-mix(in srgb, var(--c) 80%, var(--ex-fg)); background:color-mix(in srgb, var(--c) 13%, var(--ex-bg)); }
+.ex-tag.ex-accent { --c:var(--ex-accent); color:var(--ex-ink); } .ex-tag.ex-good { --c:var(--ex-good); } .ex-tag.ex-warn { --c:var(--ex-warn); color:var(--ex-warn-ink); } .ex-tag.ex-bad { --c:var(--ex-bad); }
+.ex-compare { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:24px; margin:20px 0; }
+.ex-compare > div > h4 { margin:0 0 6px; font-size:15px; padding-bottom:6px; border-bottom:2px solid var(--ex-line); }
+.ex-compare .ex-plus > h4 { border-color:var(--ex-good); } .ex-compare .ex-minus > h4 { border-color:var(--ex-bad); }
+.ex-compare ul { margin:0; padding-left:20px; } .ex-compare li { margin:4px 0; }
+.ex-terms { display:grid; grid-template-columns:max-content 1fr; gap:6px 18px; margin:20px 0; } .ex-terms dt { font-weight:600; } .ex-terms dd { margin:0; color:var(--ex-muted); }
+.ex-steps { list-style:none; counter-reset:step; margin:20px 0; padding:0; }
+.ex-steps li { counter-increment:step; position:relative; padding:2px 0 16px 46px; line-height:26px; }
+.ex-steps li::before { content:counter(step); position:absolute; left:0; top:-2px; width:32px; height:32px; line-height:32px; text-align:center;
+  font-size:13px; font-weight:700; font-variant-numeric:tabular-nums; color:var(--ex-accent); }  /* the logo orange, same as its hexagon */
+.ex-steps li::after { content:""; position:absolute; left:0; top:-2px; width:32px; height:32px; background:var(--ex-accent); -webkit-mask:HEXAGON; mask:HEXAGON; }
+.ex-steps li:not(:last-child) { background:linear-gradient(var(--ex-line), var(--ex-line)) 15.25px 34px / 1.5px calc(100% - 36px) no-repeat; }
+.ex-steps b { display:block; }
+.ex-meta { display:flex; flex-wrap:wrap; gap:4px 18px; margin:8px 0 20px; font-size:14px; color:var(--ex-muted); padding:0; list-style:none; } .ex-meta b { color:var(--ex-fg); font-weight:600; }
+.ex-score { display:grid; grid-template-columns:minmax(120px, 34%) 1fr max-content; align-items:center; gap:10px; margin:6px 0; font-size:14px; }
+.ex-score .ex-track { height:8px; border-radius:var(--ex-radius); background:var(--ex-soft); border:1px solid var(--ex-line); overflow:hidden; }
+.ex-score .ex-fill { height:100%; background:var(--ex-accent); } .ex-score > :last-child { font-variant-numeric:tabular-nums; color:var(--ex-muted); }
+.ex-caption { font-size:13px; color:var(--ex-muted); margin:6px 0 20px; }
+.ex-cite { font-size:11px; vertical-align:super; line-height:0; color:var(--ex-ink); text-decoration:none; padding:0 1px; }
+.ex-refs { font-size:13px; color:var(--ex-muted); border-top:1px solid var(--ex-line); margin-top:28px; padding:10px 0 0 20px; } .ex-refs li { margin:3px 0; }
+</style>""".replace("HEXAGON", _HEXAGON)
+
+
+def _uses_page_parts(page: str) -> bool:
+    return _PARTS_CLASS.search(page) is not None
 
 
 def _uses_diagram_kit(page: str) -> bool:
@@ -3996,6 +4441,101 @@ _CHECK_SCRIPT = "<script>" + r"""(() => {
     if (!/^exhibit-diagram:/.test(String(args[0]))) add(args.map(say).join(" "));
     return original.apply(this, args);
   };
+  // Page rules (0.4.0, after the JWMemory capstone): read-only tables of numbers, navigation the page
+  // builds for itself, emojis in headings and labels, and prose put in boxes. Exhibit's own parts
+  // (classes starting "exhibit-", the kits' elements, ECharts containers) are skipped.
+  const layout = () => {
+    const kit = (el) => el.closest('[class*="exhibit-"], [data-exhibit-kit], [_echarts_instance_]');
+    const seen = (el) => {
+      const r = el.getBoundingClientRect(), s = getComputedStyle(el);
+      return r.width > 0 && r.height > 0 && s.visibility !== "hidden" && parseFloat(s.opacity) > 0;
+    };
+    const clip = (t, n) => String(t || "").replace(/\s+/g, " ").trim().slice(0, n || 50);
+    // Tables whose cells are mostly numbers and can't be edited (hidden ones count: a closed section is still on the page).
+    const NUM = /^[~≈<>±+\-−$€£¥]?\s*\d[\d,.\s]*\s*(%|k|m|bn|s|ms|min|h|x|×)?$/i;
+    const tables = [...document.querySelectorAll("table")].filter((t) => !kit(t)).map((t) => {
+      const cells = [...t.querySelectorAll("td")];
+      const numeric = cells.filter((c) => NUM.test(c.textContent.trim())).length;
+      const editable = cells.some((c) => c.isContentEditable ||
+        c.querySelector('input:not([type="checkbox"]):not([type="radio"]), select, textarea, [contenteditable=""], [contenteditable="true"]'));
+      return { numeric, editable, start: clip([...t.querySelectorAll("th, td")].map((c) => c.textContent.trim()).join(" "), 60) };
+    }).filter((t) => t.numeric >= 4 && !t.editable).map((t) => t.start);
+    // Navigation: a bar or rail that stays on screen with links or buttons (not a full-screen app or game),
+    // and menus of 3 or more links that jump to places in the page.
+    const nav = new Set();
+    document.querySelectorAll("body *").forEach((el) => {
+      if (kit(el) || !seen(el)) return;
+      const pos = getComputedStyle(el).position;
+      if (pos !== "fixed" && pos !== "sticky") return;
+      const r = el.getBoundingClientRect();
+      if (r.width > innerWidth * 0.6 && r.height > innerHeight * 0.6) return;
+      if (el.querySelectorAll("a, button").length >= 2 && ![...nav].some((n) => n.contains(el))) nav.add(el);
+    });
+    const menus = new Map();
+    document.querySelectorAll('a[href^="#"]').forEach((a) => {
+      const id = decodeURIComponent((a.getAttribute("href") || "").slice(1));
+      if (!id || kit(a) || !document.getElementById(id)) return;
+      const box = a.closest("nav, ul, ol") || (a.parentElement && a.parentElement.parentElement) || a.parentElement;
+      if (box) menus.set(box, (menus.get(box) || 0) + 1);
+    });
+    menus.forEach((count, box) => { if (count >= 3 && ![...nav].some((n) => n.contains(box) || box.contains(n))) nav.add(box); });
+    // Emojis (characters drawn as emoji by default, or forced with U+FE0F) in headings, buttons and labels.
+    // Media symbols (play, pause, fast-forward) are fine on buttons.
+    const EMOJI = /\p{Emoji_Presentation}|\p{Extended_Pictographic}️/u;
+    const MEDIA = /[⏩-⏺]️?/gu;
+    const emoji = [...document.querySelectorAll('h1, h2, h3, h4, h5, h6, button, label, th, summary, legend, [role="tab"], nav a')]
+      .filter((el) => !kit(el)).map((el) => clip(el.textContent, 40)).filter((t) => EMOJI.test(t.replace(MEDIA, "")));
+    // Prose in a box: a bordered or shaded block of paragraphs with nothing to use or look at inside.
+    // Section-level containers (with an h1 or h2) are the page's layout, not boxes.
+    const bodyBg = document.body ? getComputedStyle(document.body).backgroundColor : "";
+    const boxes = [];
+    document.querySelectorAll("div, section, article, aside, details").forEach((el) => {
+      // Exhibit's page parts (ex-callout, ex-panel, ...) are boxes on purpose, restyled or not.
+      if (kit(el) || !seen(el) || el.closest('[class^="ex-"], [class*=" ex-"]') || boxes.some((b) => b.contains(el))) return;
+      const s = getComputedStyle(el);
+      const sides = ["Top", "Right", "Bottom", "Left"].filter((k) => parseFloat(s["border" + k + "Width"]) > 0 && s["border" + k + "Style"] !== "none").length;
+      const bg = s.backgroundColor;
+      const shaded = bg && bg !== "transparent" && !/rgba\(.*,\s*0\)$/.test(bg) && bg !== bodyBg;
+      if (sides < 3 && !shaded) return;
+      if (el.querySelector("h1, h2, input, button, select, textarea, canvas, svg, table, pre, img, video, [_echarts_instance_]")) return;
+      if (!el.querySelector("p, li") || el.innerText.trim().length < 160) return;
+      boxes.push(el);
+    });
+    // Charts (from the chart kit's records): a heading just above that repeats the chart's own title.
+    // (Notes on charts all of one type and on text reciting a chart's numbers were tried and dropped on
+    // 2026-11-12: the agent switched chart types, but the charts it changed came out worse.)
+    const info = window.__exhibitChartInfo;
+    const charts = info && info.forEach ? [...info.entries()].filter(([el]) => el.isConnected) : [];
+    const words = (s) => new Set(String(s).toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+    const same = (a, b) => { const x = words(a), y = words(b); if (x.size < 2 || y.size < 2) return false; let n = 0; x.forEach((w) => { if (y.has(w)) n++; }); return n / Math.min(x.size, y.size) >= 0.6; };
+    const titles = [];
+    charts.forEach(([el, c]) => {
+      if (!c.title) return;
+      let node = el, prev = null;
+      for (let k = 0; k < 3 && node && !prev; k++) { prev = node.previousElementSibling; node = node.parentElement; }
+      const text = prev ? clip(prev.innerText, 120) : "";
+      if (text && text.length < 160 && same(text, c.title)) titles.push(clip(c.title, 50));
+    });
+    // Value axes with no name (so no unit), and score bars standing alone: a score bar compares items on
+    // one scale, so it comes in a group of two or more (2026-11-12, the user's call).
+    const unnamed = charts.filter(([, c]) => c.unnamed).map(([el, c]) => clip(c.title || el.id || "a chart", 50));
+    const lone = [...document.querySelectorAll(".ex-score")].filter((s) => s.parentElement &&
+      [...s.parentElement.children].filter((c) => c.classList && c.classList.contains("ex-score")).length < 2).map((s) => clip(s.innerText, 50));
+    // The page's own CSS for Exhibit's parts (2026-11-12: an agent rewrote every part's style, so the look
+    // wasn't Exhibit's), and reference items that number themselves inside a list that already does.
+    const restyled = new Set();
+    const scan = (rules) => { for (const r of rules || []) {
+      if (r.selectorText) (r.selectorText.match(/\.ex-[a-z-]+/g) || []).forEach((c) => restyled.add(c));
+      if (r.cssRules) scan(r.cssRules);
+    } };
+    for (const sheet of document.styleSheets) {
+      if (sheet.ownerNode && sheet.ownerNode.hasAttribute && sheet.ownerNode.hasAttribute("data-exhibit-kit")) continue;
+      try { scan(sheet.cssRules); } catch (e) {}
+    }
+    const selfNumbered = [...document.querySelectorAll(".ex-refs > li")].filter((li) => /^\s*\[?\d+[.)\]]\s/.test(li.textContent)).map((li) => clip(li.textContent, 40));
+    return { tables, nav: [...nav].map((el) => clip(el.innerText, 60)), emoji, boxes: boxes.map((el) => clip(el.innerText, 50)), titles, unnamed, lone,
+      restyled: [...restyled].slice(0, 8), selfNumbered };
+  };
   const write = () => {
     const diagrams = [...document.querySelectorAll(".exhibit-diagram-wrap")].map((w) => {
       const error = w.querySelector(".exhibit-diagram-error");
@@ -4026,7 +4566,7 @@ _CHECK_SCRIPT = "<script>" + r"""(() => {
       const px = sizes[sizes.length >> 1];
       if (px < 10) small.push({ name: k >= 0 ? "Diagram " + (k + 1) : "Drawing " + own + " (it starts “" + [...svg.querySelectorAll("text, foreignObject")].map((x) => x.textContent.trim()).filter(Boolean).join(" ").slice(0, 40) + "”)", px: Math.round(px * 10) / 10 });
     });
-    const report = { errors, diagrams, small, text: document.body ? document.body.innerText : "" };
+    const report = { errors, diagrams, small, layout: layout(), text: document.body ? document.body.innerText : "" };
     let el = document.getElementById("exhibit-check");
     if (!el) {
       el = document.createElement("script");
@@ -4093,6 +4633,131 @@ def _check_note(report: dict) -> str | None:
             + "\n- ".join(problems[:8])
             + "\nFix them now, before you reply: change the page (read the file again before editing it, or "
               "write it whole) and call show again with this exhibit_id.")
+
+
+def _quote_list(items: list, limit: int = 3) -> str:
+    shown = [f"“{str(t).strip()}…”" if len(str(t)) >= 40 else f"“{str(t).strip()}”" for t in items[:limit]]
+    more = len(items) - len(shown)
+    return ", ".join(shown) + (f" and {more} more" if more > 0 else "")
+
+
+def _page_rules(report: dict, kind: str) -> list[str]:
+    """Page-rule breaks the render check found that stop show (nothing is saved). Read-only tables and
+    the page's own navigation count on freeform pages only: documents print their tables, and their
+    table of contents comes from the preset. Emojis in headings and labels count everywhere."""
+    found = report.get("layout") or {}
+    problems = []
+    if kind == "freeform":
+        tables = found.get("tables") or []
+        if tables:
+            problems.append(
+                f"{len(tables)} read-only table{'s' if len(tables) > 1 else ''} of numbers ({_quote_list(tables)}). "
+                "Show numbers as charts with exhibit.chart, picking the type from what the reader compares (see "
+                "\"Choosing the form\" in the exhibit instructions); the user edits a chart's data from Edit data. "
+                "Only a table the user asked for stays, and its cells must be editable.")
+        nav = found.get("nav") or []
+        if nav:
+            problems.append(
+                f"Navigation built into the page ({_quote_list(nav)}): a bar or menu that stays on screen or jumps "
+                "between sections. Exhibit adds page-wide navigation itself; remove it, and let headings and "
+                "plain scrolling do the job.")
+    emoji = found.get("emoji") or []
+    if emoji:
+        problems.append(f"Emojis in headings, buttons or labels ({_quote_list(emoji)}). Remove them and use words, "
+                        "unless the user asked for emojis.")
+    return problems
+
+
+def _layout_note(report: dict, kind: str) -> str | None:
+    """Advice that doesn't stop show: prose put in boxes (freeform pages), value axes with no name, score
+    bars standing alone, and charts under a heading that
+    repeats their title (every format)."""
+    found = report.get("layout") or {}
+    notes = []
+    boxes = found.get("boxes") or [] if kind == "freeform" else []
+    if boxes:
+        notes.append(
+            f"{len(boxes)} block{'s' if len(boxes) > 1 else ''} of text {'are' if len(boxes) > 1 else 'is'} drawn in a "
+            f"box or card ({_quote_list(boxes)}). Explanation reads best as plain paragraphs under headings; keep "
+            "boxes for things the reader uses or looks at (a widget, a chart). Unbox it next time you change the "
+            "page, unless the box marks something the reader must not miss.")
+    titles = found.get("titles") or []
+    if titles:
+        notes.append(
+            f"The heading right above {_quote_list(titles)} repeats the chart's own title, so it shows twice. The kit "
+            "draws the chart's title: remove the heading (or the chart's title) and call show again with this exhibit_id.")
+    unnamed = found.get("unnamed") or []
+    if unnamed:
+        notes.append(
+            f"The value axis of {_quote_list(unnamed)} has no name, so the reader can't tell what the numbers are. Add "
+            "yLabel with the measure and its unit (\"Facts found (of 72)\", \"Seconds per question\"), and better: "
+            "\"higher\" or \"lower\" when one direction is clearly better, then call show again with this exhibit_id.")
+    restyled = found.get("restyled") or []
+    if restyled:
+        notes.append(
+            f"The page's own CSS restyles Exhibit's page parts ({', '.join(restyled)}). Exhibit already styles them, "
+            "so the page looks like every other exhibit. Unless the user asked for a different look, delete those "
+            "rules (and any blanket reset such as * { padding: 0 }) and call show again with this exhibit_id.")
+    numbered = found.get("selfNumbered") or []
+    if numbered:
+        notes.append(
+            f"Reference items start with their own number ({_quote_list(numbered)}), but ex-refs already numbers "
+            "them, so they read \"1. 1. …\". Write the items without a leading number (for a file named \"1. Notes.md\", "
+            "write its name without the \"1.\") and call show again with this exhibit_id.")
+    lone = found.get("lone") or []
+    if lone:
+        notes.append(
+            f"A score bar stands alone ({_quote_list(lone)}). Score bars compare items on one scale, so they come in "
+            "groups of two or more rows; a single number belongs in the text or a stat tile. Fix it and call show "
+            "again with this exhibit_id.")
+    return "\n\n".join(notes) or None
+
+
+# Lost text after a refusal (0.4.0, capstone rerun): fixing a refused page, the agent ran
+# sed -i '168,200d' "to test", deleted 33 lines of its own page and showed the rest. show now remembers
+# the text of a refused page, under every name the next attempt may use (the exhibit's id, the file,
+# the title), and says which passages of prose are gone from the version that follows.
+_REFUSED_TTL = 3600
+_refused: dict[str, tuple[float, str]] = {}
+
+
+def _attempt_keys(inputs: dict[str, Any], exhibit_id: str | None) -> list[str]:
+    keys = []
+    if exhibit_id:
+        keys.append("id:" + exhibit_id)
+    if isinstance(inputs.get("html_file"), str) and inputs["html_file"].strip():
+        keys.append("file:" + os.path.normcase(os.path.abspath(inputs["html_file"].strip())))
+    if isinstance(inputs.get("title"), str) and inputs["title"].strip():
+        keys.append("title:" + inputs["title"].strip().lower())
+    return keys
+
+
+def _remember_refused(keys: list[str], report: dict | None) -> None:
+    now = time.time()
+    for key in [k for k, (at, _) in _refused.items() if now - at > _REFUSED_TTL]:
+        _refused.pop(key, None)
+    text = str((report or {}).get("text") or "")
+    for key in keys:
+        _refused[key] = (now, text)
+
+
+def _lost_text_note(keys: list[str], report: dict) -> str | None:
+    """Passages of prose that were on the refused attempt and are gone from this one, as a note."""
+    earlier = None
+    for key in keys:
+        found = _refused.pop(key, None)
+        if found and time.time() - found[0] <= _REFUSED_TTL and earlier is None:
+            earlier = found[1]
+    if not earlier:
+        return None
+    now = re.sub(r"\s+", " ", str(report.get("text") or ""))
+    gone = [line.strip() for line in earlier.splitlines()
+            if len(line.strip()) >= 60 and "\t" not in line and re.sub(r"\s+", " ", line.strip()) not in now]
+    if len(gone) < 2:
+        return None
+    return (f"{len(gone)} passages of text that were on the page show refused are gone from this version, such as "
+            f"{_quote_list([g[:60] for g in gone], 2)}. Fixing a page rule shouldn't remove other content. If you didn't "
+            "mean to cut them, put them back (read the file to see what's left) and call show again with this exhibit_id.")
 
 
 def _page_text(report: dict) -> str:
@@ -4435,7 +5100,7 @@ const renderData = () => {
   add.type = "button";
   add.addEventListener("click", () => {
     const prev = t.rows[t.rows.length - 1];
-    t.rows.push({ label: t.kind === "points" && prev ? prev.label : "", values: t.cols.map(() => null), added: true });
+    t.rows.push({ label: (t.kind === "points" || t.kind === "values") && prev ? prev.label : "", values: t.cols.map(() => null), added: true });
     sendEdit(c);
     renderData();
     const inputs = dataPanel.querySelectorAll("tbody tr:last-child input");
@@ -4752,6 +5417,8 @@ def _preset_scripts(page: str, thumbnail: bool) -> str:
     chart kit when the page calls exhibit.chart(. Goes after the bridge, which defines window.exhibit."""
     kind = _page_kind(page)
     scripts = _CHART_KIT_SCRIPT if _uses_chart_kit(page) or kind == "charts" else ""
+    if _uses_page_parts(page):
+        scripts += _PARTS_STYLE
     if _uses_diagram_kit(page):
         scripts += _diagram_kit_script()
     if kind == "charts":
@@ -5026,6 +5693,12 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
                 "document as one string) or html_file (the full path of an .html file you saved with "
                 "write_file). Both are listed in this tool's parameters. Don't paste the HTML into the chat.",
             )
+        before = None
+        if inputs.get("exhibit_id"):
+            try:
+                before = (_exhibit_dir(inputs["exhibit_id"]) / "meta.json").read_bytes()
+            except OSError:
+                pass
         meta, version = _save_version(
             inputs.get("title"),
             page,
@@ -5033,9 +5706,23 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
             inputs.get("summary"),
             session_id,
         )
+        kind = _exhibit_kind(meta)
+        # The render check runs before the page is opened: a page that breaks the page rules is taken
+        # back out (nothing is saved), and show fails with what to change.
+        report = _render_check(meta["id"], version)
+        broken = _page_rules(report, kind) if report is not None else []
+        keys = _attempt_keys(inputs, meta["id"] if before is not None else None)
+        if broken:
+            _undo_version(meta["id"], version, before)
+            _remember_refused(keys, report)
+            again = (f"call show again with exhibit_id {meta['id']}" if before is not None
+                     else "call show again (no exhibit_id: this exhibit wasn't created)")
+            raise _ToolFailure(
+                "page_rules",
+                "Nothing was saved or shown: the page breaks Exhibit's page rules.\n- " + "\n- ".join(broken)
+                + f"\nFix the page (read the file again before editing it, or write it whole) and {again}.")
         _open_tab(meta["id"])
         url = f"{_ensure_server()}e/{meta['id']}"
-        kind = _exhibit_kind(meta)
         result = {
             "exhibit_id": meta["id"],
             "title": meta["title"],
@@ -5046,15 +5733,14 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
             "opened": _open_browser(url, inputs.get("open")),
         }
         notes = []
-        report = _render_check(meta["id"], version)
         if report is not None:
             result["page_text"] = _page_text(report)
-            check_note = _check_note(report)
-            if check_note:
-                notes.append(check_note)
+            for note in (_lost_text_note(keys, report), _check_note(report), _layout_note(report, kind)):
+                if note:
+                    notes.append(note)
         if _CHART_LIBS.search(page) and not _uses_chart_kit(page):
             notes.append(_OWN_CHART_NOTE)
-        elif _uses_chart_kit(page) and _OWN_TABLE.search(page):
+        elif report is None and _uses_chart_kit(page) and _OWN_TABLE.search(page):  # the page rules cover it otherwise
             notes.append(_OWN_TABLE_NOTE)
         diagram_note = _diagram_note(page)
         if diagram_note:

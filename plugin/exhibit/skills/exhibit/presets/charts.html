@@ -18,15 +18,22 @@ How to use it:
   must stay valid JSON: double quotes, no comments, no trailing commas.
 - "charts": a list of charts. Each is an object:
   - "id": short and stable across versions; the user's edits are saved per id, and stats name it.
-  - "type": line | area | bar | pie | donut | scatter. Change over time: line (area with
-    "stack": true for parts of a total). Comparing categories: bar ("horizontal": true for long
-    labels or many categories). Parts of a whole, 8 or fewer: pie or donut. Two measures: scatter.
+  - "type", from the question the reader brings (vary it; not every chart is a bar chart):
+    change over time: line (area with "stack": true for parts of a total); which is bigger or a
+    ranking: bar (sorted; stacked bars and bars with long labels lie sideways by themselves); the gap between two
+    values per item: dot; how values are spread: histogram, or boxplot to compare groups; a value
+    per row and column: heatmap; activity per day: calendar; what took a total from start to end:
+    waterfall; parts of a whole: pie or donut (8 or fewer), treemap or sunburst (more, or nested);
+    stages that narrow: funnel; flows: sankey; a profile across 3 to 8 measures: radar; two
+    measures together: scatter.
   - "title": what the chart shows.
-  - The data. line, area and bar: "x": [labels] and "series": {"Name": [numbers], ...}.
-    pie and donut: "data": {"Label": number, ...}. scatter: "series": {"Name": [[x, y], ...]}
-    with "xLabel" and "yLabel".
+  - The data. line, area, bar, dot, heatmap (a series per row), waterfall (changes) and radar:
+    "x": [labels] and "series": {"Name": [numbers], ...}. histogram and boxplot: "series":
+    {"Group": [raw values]}. pie, donut, funnel, calendar ("2026-03-01"), treemap and sunburst
+    ("Group / Item" nests) and sankey ("From → To"): "data": {"Label": number, ...}. scatter:
+    "series": {"Name": [[x, y], ...]} with "xLabel" and "yLabel".
   - Optional: "prefix" and "suffix" (like "$" and "k"), "decimals", "stack": true,
-    "horizontal": true, "smooth": false, "height" (pixels, 360 by default), "colors" (a list, or
+    "horizontal", "smooth": false, "height" (pixels, 360 by default), "colors" (a list, or
     colors by series name), "caption" (one sentence under the chart, without numbers from the
     data), and "width": "half" (two half-width charts sit side by side).
   - Each chart shows its own data: data the user gave or you counted. Don't add a chart worked
@@ -41,7 +48,7 @@ How to use it:
     row by row); "show": "label" (the row's label, like "Dec", for max, min, first or last) or
     "both" ("Dec ($74k)"); "prefix", "suffix" and "decimals" (the chart's by default); "note"
     (a short line under the number, without numbers from the data).
-  - Not for scatter charts.
+  - Only for line, area, bar, pie and donut charts.
 - Use the exact numbers. When they come from files, count them with a script.
 - Keep the <style> as it is. To restyle, change only the variables on :root (and their dark copy).
 -->
