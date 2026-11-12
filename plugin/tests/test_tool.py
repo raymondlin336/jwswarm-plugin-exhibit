@@ -1092,6 +1092,34 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertEqual(MOD._diagram_sources('<pre class="x exhibit-diagram">A &amp; B<br/>C <b>D</b></pre>'), ["A & B<br>C D"])
         self.assertEqual(MOD._diagram_type("\n---\nconfig:\n  look: classic\n---\n%% note\nflowchart LR\nA-->B"), "flowchart")
 
+    def test_documents_keep_diagram_controls_on_screen_and_paper_layout_for_pdf(self):
+        # 2026-11-12: a Document page copies print rules onto the screen; it copied the diagram kit's too,
+        # which hid every diagram's step and zoom controls in documents. Kit styles are now left for paper.
+        kit = MOD._diagram_kit_script()
+        self.assertIn('style.setAttribute("data-exhibit-kit", "diagram")', kit)
+        self.assertIn('"@media print{" + PAPER + "}" + asPaper(PAPER)', kit)  # printing, and html.exhibit-paper
+        doc = MOD._DOCUMENT_SCRIPT
+        self.assertIn('owner.hasAttribute("data-exhibit-kit")) continue;', doc)
+        self.assertIn("new ResizeObserver", doc)  # page breaks follow late drawing, zoom and steps
+        self.assertIn('addEventListener("beforeprint", () => paper(true))', doc)
+        # The PDF export lays the pages out in paper form from the start.
+        exhibit = self.show(html='<pre class="exhibit-diagram">flowchart LR\n A-->B</pre>')
+        captured = {}
+        real_run = MOD.subprocess.run
+        def fake_run(command, **kw):
+            source = Path([c for c in command if c.startswith("file:")][0].replace("file:///", ""))
+            captured["page"] = source.read_text(encoding="utf-8")
+            Path([c for c in command if c.startswith("--print-to-pdf=")][0].split("=", 1)[1]).write_bytes(b"%PDF-1.4\n%%EOF")
+            return types.SimpleNamespace(returncode=0)
+        MOD.subprocess.run = fake_run
+        try:
+            if MOD._pdf_browser() is None:
+                self.skipTest("no Edge or Chrome")
+            MOD._export_pdf(exhibit["exhibit_id"], None)
+        finally:
+            MOD.subprocess.run = real_run
+        self.assertIn('document.documentElement.classList.add("exhibit-paper")', captured["page"])
+
     def test_diagrams_are_interactive_and_the_agent_is_told_to_step_through(self):
         kit = MOD._diagram_kit_script()
         # Hover and click focus, steps (listed and automatic), details, zoom, the page hook, print.
@@ -1166,6 +1194,27 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn('id = "exhibit-check"', checked[2])
         self.assertEqual(checked[1].get("Cache-Control"), "no-store")
         self.assertNotIn("page_text", exhibit)  # the check is off in tests unless a test turns it on
+
+    def test_render_check_lets_pages_save_and_read_their_data(self):
+        # 2026-11-12, widget round W8: the check opened pages with no viewer, so exhibit.set failed and
+        # show told the agent to fix a working page. In the check, saving works on a copy of the data.
+        page = ('<p id="out">waiting</p><script>(async () => { await exhibit.set("ticks", 2);'
+                ' const t = await exhibit.get("ticks"); const old = await exhibit.get("streak");'
+                ' document.getElementById("out").textContent = "ticks " + t + ", streak " + old; })();</script>')
+        exhibit = self.show(html=page)
+        MOD._apply_data_op(exhibit["exhibit_id"], {"op": "set", "key": "streak", "value": 5})
+        base = exhibit["url"].split("/e/")[0] + "/"
+        checked = _http(f"{base}raw/{exhibit['exhibit_id']}/1?check=1")[2]
+        self.assertIn('const values = {"streak": 5};', checked)  # the saved data, as a copy
+        self.assertNotIn('"exhibit-print"', checked)  # not the viewer bridge
+        self.assertIn('"exhibit-print"', _http(f"{base}raw/{exhibit['exhibit_id']}/1")[2])  # the viewer still gets it
+        if MOD._pdf_browser() is None:
+            return
+        os.environ.pop("EXHIBIT_NO_RENDER_CHECK", None)
+        again = self.show(html=page, exhibit_id=exhibit["exhibit_id"])
+        self.assertNotIn("note", again)
+        self.assertEqual(again["page_text"], "ticks 2, streak 5")
+        self.assertEqual(MOD._read_data(exhibit["exhibit_id"]), {"streak": 5})  # the check saved nothing for real
 
     def test_render_check_in_a_real_browser(self):
         browser, lib = MOD._pdf_browser(), Path.home() / ".exhibit" / "lib"

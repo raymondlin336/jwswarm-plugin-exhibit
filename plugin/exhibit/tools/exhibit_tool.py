@@ -1631,7 +1631,7 @@ class _Handler(BaseHTTPRequestHandler):
                 # a new address), so the browser can keep it: pages and thumbnails only fetch and
                 # re-run an exhibit again after it's edited. The address also carries the build (?b=),
                 # so a plugin update that changes the injected scripts gets fresh copies.
-                self._send(200, _inject_bridge(page, thumbnail, check), "text/html; charset=utf-8", self._page_csp(),
+                self._send(200, _inject_bridge(page, thumbnail, check, parts[1]), "text/html; charset=utf-8", self._page_csp(),
                            cache="no-store" if check else "private, max-age=31536000, immutable")
             elif len(parts) == 3 and parts[0] == "api" and parts[2] == "export":
                 if self._cross_site():
@@ -2715,6 +2715,17 @@ _DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
   const PARTS = ".ex-part";  // every element the kit recognised as a part, link or group (marked when the model is built)
   // The Mermaid text is never shown, whatever the page's own CSS gives its block (Kit round 2: a
   // min-height left a 280 px gap), so it's taken out of the layout entirely.
+  // Paper: what printed copies look like (no controls, the whole diagram at the page width, the listed
+  // steps under it). It applies when printing, and to pages laid out as paper on screen: a Document's
+  // PDF export sets html.exhibit-paper, so its page breaks are measured on the paper layout. The
+  // Document page doesn't copy these onto the screen (the style is marked data-exhibit-kit), so a
+  // diagram in a document keeps its controls.
+  const PAPER = ".exhibit-diagram-tools,.exhibit-diagram-steps,.exhibit-diagram-detail{display:none!important}"
+    + ".exhibit-diagram-box.zoomed{overflow:visible;max-height:none}.exhibit-diagram-box svg{max-width:100%!important;width:auto!important}"
+    + ".exhibit-diagram-box svg.ex-dim :is(" + PARTS + "){opacity:1!important}"
+    + ".exhibit-diagram-print{display:block;text-align:left;font-size:.92em;margin:.6em 0 0}";
+  const asPaper = (rules) => rules.replace(/(^|\})([^{}]+)\{/g, (m, end, selectors) =>
+    end + selectors.split(/,(?![^(]*\))/).map((s) => "html.exhibit-paper " + s.trim()).join(",") + "{");
   const css = "pre.exhibit-diagram{display:none!important}"
     + ".exhibit-diagram-wrap{position:relative;margin:1.2em 0;break-inside:avoid}"
     + ".exhibit-diagram-box{position:relative;width:100%;text-align:center}"
@@ -2750,10 +2761,7 @@ _DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     + ".exhibit-diagram-detail b{display:block;margin-bottom:3px}"
     + ".exhibit-diagram-detail p{margin:0;white-space:pre-wrap}"
     + ".exhibit-diagram-print{display:none}"
-    + "@media print{.exhibit-diagram-tools,.exhibit-diagram-steps,.exhibit-diagram-detail{display:none!important}"
-    + ".exhibit-diagram-box.zoomed{overflow:visible;max-height:none}.exhibit-diagram-box svg{max-width:100%!important;width:auto!important}"
-    + ".exhibit-diagram-box svg.ex-dim :is(" + PARTS + "){opacity:1!important}"
-    + ".exhibit-diagram-print{display:block;text-align:left;font-size:.92em;margin:.6em 0 0}}"
+    + "@media print{" + PAPER + "}" + asPaper(PAPER)
     + "@media (prefers-reduced-motion: reduce){.exhibit-diagram-box svg :is(" + PARTS + "){transition:none}}";
   const hex = (color) => {  // any CSS colour -> #rrggbb (Mermaid only takes hex)
     const probe = document.createElement("i");
@@ -3322,6 +3330,7 @@ _DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
   const collect = () => {
     if (diagrams) return diagrams;
     const style = document.createElement("style");
+    style.setAttribute("data-exhibit-kit", "diagram");  // a Document page leaves its print rules for paper
     style.textContent = css;
     document.head.appendChild(style);
     diagrams = [...document.querySelectorAll("pre.exhibit-diagram")].map((pre, i) => {
@@ -3460,6 +3469,15 @@ _STANDALONE_BRIDGE = """<script>(() => {
 })();</script>"""
 
 
+def _standalone_bridge(exhibit_id: str) -> str:
+    """window.exhibit working on a copy of the exhibit's saved data, for pages with no viewer around them:
+    exported files, and show's render check (where saving through the viewer would fail and be reported
+    as an error the agent then "fixes" on a working page; Kit round W8, 2026-11-12)."""
+    data = json.dumps(_read_data(exhibit_id), ensure_ascii=False)
+    data = data.replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    return _STANDALONE_BRIDGE.replace("__DATA__", data)
+
+
 def _export_name(title: str) -> str:
     """A file name for an exported exhibit: its title without characters Windows doesn't allow."""
     name = re.sub(r'[\\/:*?"<>|\x00-\x1f]+', " ", title)
@@ -3471,9 +3489,7 @@ def _export_html(exhibit_id: str, version: int | None) -> tuple[str, str]:
     """A standalone HTML file of one version (the latest by default), with its saved data built in."""
     meta = _load_meta(exhibit_id)
     page, _ = _exhibit_html(exhibit_id, version)
-    data = json.dumps(_read_data(exhibit_id), ensure_ascii=False)
-    data = data.replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
-    script = _STANDALONE_BRIDGE.replace("__DATA__", data)
+    script = _standalone_bridge(exhibit_id)
     script += _preset_scripts(page, False)  # an exported deck draws its own slide buttons
     return _export_name(meta["title"]), _insert_in_head(page, script)
 
@@ -3911,7 +3927,10 @@ def _export_pdf(exhibit_id: str, version: int | None) -> tuple[str, bytes]:
     # The exhibit's usual limits apply while it renders: scripts only from the approved CDNs, no
     # network requests, no forms. (A <meta> CSP can't sandbox, so that part is left out.)
     policy = f'<meta http-equiv="Content-Security-Policy" content="{_PDF_RENDER_CSP}">'
-    page = _insert_in_head(page, policy)
+    # Paper mode from the start: kits draw their printed form (a diagram without its controls, at the
+    # page width), so a document's page breaks are measured on what's printed.
+    paper = '<script>document.documentElement.classList.add("exhibit-paper")</script>'
+    page = _insert_in_head(page, policy + paper)
     # The browser may still hold files in its profile when we're done, so cleanup is best effort.
     with tempfile.TemporaryDirectory(prefix="exhibit-pdf-", ignore_cleanup_errors=True) as work:
         folder = Path(work)
@@ -4535,6 +4554,9 @@ _DOCUMENT_SCRIPT = """<script>(() => {
     // Print rules everywhere, and screen-only rules (narrow-window layouts) nowhere.
     let copied = "";
     for (const sheetRules of [...document.styleSheets]) {
+      // The plugin's kits (diagrams) keep their print rules for paper: on screen their controls stay.
+      const owner = sheetRules.ownerNode;
+      if (owner && owner.hasAttribute && owner.hasAttribute("data-exhibit-kit")) continue;
       let rules;
       try { rules = [...sheetRules.cssRules]; } catch (err) { continue; }
       for (const rule of rules) {
@@ -4590,9 +4612,29 @@ _DOCUMENT_SCRIPT = """<script>(() => {
       gap.style.height = Math.max(0, parseFloat(gap.style.height) + off) + "px";
     }
   };
+  // Page breaks follow the content: when any block changes height after the pages were laid out (a
+  // diagram or chart that draws late, a diagram's zoom or step controls, a section the page's own code
+  // opens), they're laid out again. The spacers sit between blocks, so they don't trigger this.
+  let watcher = null, pending = 0;
+  const watch = (list) => {
+    if (!window.ResizeObserver) return;
+    if (watcher) watcher.disconnect();
+    const heights = new Map();
+    watcher = new ResizeObserver((entries) => {
+      let changed = false;
+      entries.forEach((e) => {
+        const h = Math.round(e.contentRect.height);
+        if (heights.has(e.target) && Math.abs(heights.get(e.target) - h) > 1) changed = true;
+        heights.set(e.target, h);
+      });
+      if (changed) { clearTimeout(pending); pending = setTimeout(() => { if (stage) paginate(); }, 150); }
+    });
+    list.forEach((el) => watcher.observe(el));
+  };
   const paginate = () => {
     clear();
     const list = blocks(sheet, []);
+    watch(list);
     for (let i = 0; i < list.length; i++) {
       const el = list[i];
       const top = relTop(el), height = el.offsetHeight;
@@ -4686,6 +4728,11 @@ _DOCUMENT_SCRIPT = """<script>(() => {
     paginate();
     addEventListener("scroll", () => report(), { passive: true });
     addEventListener("resize", () => { fitToWindow(); report(true); });
+    // Printing from the browser: lay the pages out in their paper form first (see html.exhibit-paper).
+    const paper = (on) => { if (document.documentElement.classList.contains("exhibit-paper") !== on) {
+      document.documentElement.classList.toggle("exhibit-paper", on); paginate(); } };
+    addEventListener("beforeprint", () => paper(true));
+    addEventListener("afterprint", () => paper(false));
   };
   const again = () => { if (stage) paginate(); };
   if (document.readyState === "loading") addEventListener("DOMContentLoaded", start); else start();
@@ -4869,8 +4916,11 @@ _SNAPSHOT_SCRIPT = _LIB_LOADER_SCRIPT + """<script>(() => {
 })();</script>"""
 
 
-def _inject_bridge(page: str, thumbnail: bool = False, check: bool = False) -> str:
-    scripts = (_CHECK_SCRIPT if check else "") + _BRIDGE_SCRIPT + (_CALM_SCRIPT if thumbnail else _QUOTE_SCRIPT + _SNAPSHOT_SCRIPT)
+def _inject_bridge(page: str, thumbnail: bool = False, check: bool = False, exhibit_id: str | None = None) -> str:
+    # The render check opens the page with no viewer around it: saving then works on a copy of the
+    # saved data, as in an exported file, so only the page's own faults get reported.
+    bridge = _standalone_bridge(exhibit_id) if check and exhibit_id else _BRIDGE_SCRIPT
+    scripts = (_CHECK_SCRIPT if check else "") + bridge + (_CALM_SCRIPT if thumbnail else _QUOTE_SCRIPT + _SNAPSHOT_SCRIPT)
     scripts += _preset_scripts(page, thumbnail)
     return _insert_in_head(page, scripts)
 

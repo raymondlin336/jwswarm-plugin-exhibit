@@ -57,6 +57,18 @@ Sources: the Mermaid docs and changelog (researched 2026-11-11), plus a sandbox 
    - **Unchanged:** licensing (the zip still contains no library copies) and exported HTML, which keeps pointing at jsDelivr because the local server doesn't exist on other machines.
    - **Still to check:** the test covered Edge only. Chrome uses the same engine; Firefox separates its cache even more strictly, so the result should hold there too.
 
+### Diagrams in Document pages (fixed 2026-11-12)
+
+The Document page applies every `@media print` rule on screen, so the screen shows the paper layout. It copied the diagram kit's print rules too, which hid every diagram's step and zoom controls in documents, showed the printed step list instead, and squeezed wide diagrams to unreadable text. The render check couldn't see it: it reported small text, not missing controls. The fix has three general parts:
+- **Plugin kit styles stay off the screen.** Kit styles are marked `data-exhibit-kit`, and the Document page doesn't copy their print rules onto the screen. Any future kit can do the same.
+- **Paper mode.** The kit's paper rules also apply under `html.exhibit-paper`. The PDF export sets that class from the start, and the Document page sets it around printing, so page breaks are measured on the printed form.
+- **Page breaks follow changes in height.** The Document page lays its page breaks out again whenever a block changes height after layout: a late diagram or chart, zoom, step controls, or a section the page opens.
+
+Checked in headless Edge on a Document with a wide stepped flowchart and a sequence diagram:
+- **On screen:** controls are shown and the wide diagram is at a readable size.
+- **After zoom and in paper mode:** no block crosses a page edge.
+- **Export:** the PDF is 4 pages.
+
 ## Sandbox test result
 
 - **All 35 bundled diagram types render** from the single-file build `https://cdn.jsdelivr.net/npm/mermaid@12.3.0/dist/mermaid.min.js`, with no CSP violations and no network requests after load.
