@@ -61,34 +61,23 @@ def _build_id() -> str:
 _BUILD = _build_id()
 _ACTIONS = ("show", "preset", "list", "gallery", "read", "open", "delete", "stop")
 
-# Presets: ready-made starting pages beside the skill, plus "freeform": a page the agent writes itself.
-# ("none" was the old name for freeform and is still accepted.)
-_PRESET_DIR = Path(__file__).resolve().parents[1] / "skills" / "exhibit" / "presets"
+# The format question (0.4.1): the user picks how a new exhibit first opens. The agent always writes one
+# page, and the viewer shows it as that page, as slides or as document pages (the user can switch).
+# Before 0.4.1 these were presets, ready-made starting pages; exhibits made from them still open as
+# they were made. ("none" was the old name for freeform; old names are still accepted.)
 _PRESETS = {
-    "document": "A printable document: report, proposal, one-pager or brief, memo or letter, meeting notes.",
-    "slides": "A 16:9 slide deck you click through, printing one slide per page.",
-    "charts": "Charts & Graphs: one or more charts of the user's data, with a title and a one-sentence takeaway. "
-              "The user edits the data and exports PNG or PDF.",
-    "freeform": "Freeform: a page you write yourself, such as a chart, dashboard, calculator, tracker or prototype.",
+    "document": "Opens as document pages (US Letter); exports as PDF.",
+    "slides": "Opens as a 16:9 slide deck; exports as PDF.",
+    "freeform": "Opens as one scrolling page.",
 }
+_PRESET_VIEWS = {"document": "document", "slides": "slides", "freeform": "page"}
 _PRESET_ALIASES = {"none": "freeform", "no preset": "freeform", "free-form": "freeform", "default": "freeform",
-                   "chart": "charts", "graphs": "charts", "charts & graphs": "charts", "charts and graphs": "charts"}
-_PRESET_NEXT = (
-    "Start the new exhibit from this page. Read the comment at its top first: it lists the layouts and "
-    "parts. Keep its <style> and <script> as they are, replace every sample sentence and number with "
-    "the user's content, and delete parts you don't need. Then call show with the finished page "
-    "(as html_file for long pages)."
-)
-_CHARTS_NEXT = (
-    "Start the new exhibit from this page. Read the comment at its top first. Change only the text (title, "
-    "takeaway, source) and the charts and stats in <script type=\"application/json\" id=\"exhibit-charts\">, "
-    "which must stay valid JSON. Exhibit draws them; the user edits the data from the exhibit's top bar, and the "
-    "stats recalculate. Each chart shows its own data, not totals worked out from another chart; numbers from the "
-    "data go in stats, not in the text. Don't add chart code, tables, stat tiles or scripts. Then call show with "
-    "the finished page (as html_file for long pages)."
-)
+                   "page": "freeform", "doc": "document", "deck": "slides", "chart": "freeform", "charts": "freeform",
+                   "graphs": "freeform", "charts & graphs": "freeform", "charts and graphs": "freeform"}
+_VIEW_OPENS = {"page": "as one scrolling page", "slides": "as slides", "document": "as document pages"}
 _FREEFORM_NEXT = (
-    "Freeform: write the page yourself, following the exhibit instructions, then call show with it. "
+    "Write the page yourself, following the exhibit instructions, then call show with it. The viewer can show it as "
+    "one page, as slides or as document pages, so write it in sections under headings, one idea per section. "
     "For charts, call exhibit.chart(element, spec), picking the type from the reader's question (the table under "
     "Charts: line, bar, dot, histogram, boxplot, heatmap, calendar, waterfall, pie, treemap, sunburst, funnel, "
     "sankey, radar, scatter), e.g. "
@@ -492,6 +481,7 @@ main { flex:1; min-width:0; overflow-y:auto; }
 .card-head .kind { width:18px; height:18px; margin-top:2px; }
 .file-title { display:flex; align-items:center; gap:8px; min-width:0; }
 .vbar .kind { width:20px; height:20px; margin-left:4px; }
+#view-icon { display:inline-flex; flex:none; }
 .file-date { font-size:12.5px; color:var(--muted); white-space:nowrap; }
 @container (max-width:720px) {
   .file-row { grid-template-columns:72px minmax(0, 1fr); row-gap:2px; }
@@ -548,6 +538,33 @@ main.viewer { display:flex; flex-direction:column; overflow:hidden; }
   border:1px solid transparent; border-radius:8px; padding:6px 8px; text-overflow:ellipsis; }
 .title-input:hover { background:var(--hover); }
 .title-input:focus { outline:0; border-color:var(--accent); background:var(--card); }
+/* While an exhibit loads or is laid out in a new view: a spinner instead of the half-built page. */
+.vbody iframe { transition:opacity .15s; }
+.vbody iframe.loading { opacity:0; transition:none; }
+.frame-loading { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
+.frame-loading[hidden] { display:none; }
+.spinner { width:26px; height:26px; border-radius:50%; border:2.5px solid var(--line2); border-top-color:#ff8821;
+  animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+/* Page panel (Slides and Document views): the page control, then every slide or page as a thumbnail. */
+.pp { width:190px; flex:none; display:flex; flex-direction:column; min-height:0; border-right:1px solid var(--line); background:var(--bg); }
+.pp-head { display:flex; justify-content:center; padding:8px 6px; border-bottom:1px solid var(--line); }
+.pp-list { flex:1; min-height:0; overflow-y:auto; padding:14px 0 20px; display:flex; flex-direction:column; align-items:center; gap:14px; }
+.pp-item { all:unset; box-sizing:border-box; display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer; }
+.pp-img { display:block; width:150px; border-radius:4px; background:var(--chip) no-repeat; outline:1px solid var(--line);
+  box-shadow:0 1px 2px rgba(0,0,0,.06); transition:outline-color .12s; }
+.pp-img.ready { background-color:#fff; }
+.pp-n { font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+.pp-item:hover .pp-img { outline:2px solid var(--line2); }
+.pp-item.on .pp-img { outline:2px solid #ff8821; }
+.pp-item.on .pp-n { color:var(--fg); font-weight:600; }
+.pp-item:focus-visible .pp-img { outline:2px solid var(--accent); }
+/* View switch (freeform): Page | Slides | Document. */
+.views { display:flex; flex:none; padding:3px; gap:2px; border-radius:9px; background:var(--chip); }
+.views a { padding:5px 11px; border-radius:7px; font-size:13px; color:var(--fg2); text-decoration:none; white-space:nowrap; }
+.views a:hover { color:var(--fg); }
+.views a[aria-current="page"] { background:var(--card); color:var(--fg); font-weight:600; box-shadow:0 1px 2px rgba(0,0,0,.08); }
+.views a:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 .ver { position:relative; flex:none; }
 .ver-btn { display:flex; align-items:center; gap:6px; height:34px; padding:0 10px; border:0; border-radius:8px;
   background:transparent; color:var(--fg2); font-size:13px; cursor:pointer; }
@@ -564,6 +581,8 @@ main.viewer { display:flex; flex-direction:column; overflow:hidden; }
 .ver-menu .latest { color:var(--accent); font-size:11.5px; }
 .vbody { flex:1; min-height:0; display:flex; position:relative; }
 .vbody iframe { flex:1; min-width:0; height:100%; border:0; }
+/* Slim scrollbars in the viewer and gallery too, matching the exhibits' (_SCROLLBAR_CSS). */
+__SCROLLBAR_CSS__
 /* Edit data: a button in the top bar and a panel docked on the right, for the charts on the page. */
 .data-btn { display:flex; align-items:center; gap:7px; height:34px; padding:0 12px; flex:none; border:1px solid var(--line);
   border-radius:8px; background:transparent; color:var(--fg); font-size:13px; font-weight:600; cursor:pointer; }
@@ -745,10 +764,9 @@ _LINK_ICON = (
 )
 # The New exhibit page's formats, in the picker's words (rails/exhibit_ask_rail.py).
 _NEW_PAGE_FORMATS = {
-    "document": ("Document", "Page by page document, export as PDF or .md"),
-    "slides": ("Slides", "A slide deck for presentations, export as PDF"),
-    "charts": ("Charts & Graphs", "Dynamic visualizations of data, export as PDF or PNG."),
-    "freeform": ("Freeform", "Written from scratch, no standard formats or templates."),
+    "document": ("Document", "Opens as document pages, export as PDF"),
+    "slides": ("Slides", "Opens as a slide deck, export as PDF"),
+    "freeform": ("Freeform", "Opens as one scrolling page; switch to slides or pages any time"),
 }
 _PENCIL_ICON = (
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
@@ -1121,124 +1139,56 @@ def _session_fields(meta: dict[str, Any]) -> dict[str, Any]:
 # formats isn't supported for now (see TODO.md); for another format, make a new exhibit.
 
 
-def _preset_problem(page: str, kind: str) -> str | None:
-    """Why a page doesn't have the structure its preset needs, or None if it does."""
-    body = re.sub(r"<!--.*?-->", "", page, flags=re.S)
-    if kind == "document" and not re.search(r'<[a-z]+\b[^>]*\bclass="[^"]*\bsheet\b', body, re.I):
-        return "its content isn't inside <article class=\"sheet\">"
-    if kind == "slides" and not re.search(r'<section\b[^>]*\bclass="[^"]*\bslide\b', body, re.I):
-        return 'it has no <section class="slide"> slides'
-    if kind == "charts":
-        return _charts_problem(body)
-    return None
+def _check_preset(meta: dict[str, Any] | None, html: str) -> str:
+    """The kind of page a new version is: 'freeform', or an old preset's kind when the page still carries
+    its tag (an exhibit made before 0.4.1, edited from its own page). Nothing is refused: there's no
+    format to keep any more, only the view the exhibit is shown in."""
+    return _page_kind(html) or "freeform"
 
 
+# The chart kit's types (exhibit.chart's spec.type).
 _CHART_TYPES = ("line", "area", "bar", "pie", "donut", "scatter", "histogram", "boxplot", "dot", "heatmap",
                 "calendar", "waterfall", "funnel", "treemap", "sunburst", "sankey", "radar")
-_DATA_CHART_TYPES = ("pie", "donut", "funnel", "treemap", "sunburst", "sankey", "calendar")  # "data": {"Label": number}
-_STAT_CHART_TYPES = ("line", "area", "bar", "pie", "donut")
-_CHARTS_BLOCK_RE = re.compile(
-    r'<script\b[^>]*\bid=["\']exhibit-charts["\'][^>]*>(.*?)</script\s*>', re.IGNORECASE | re.DOTALL)
 
 
-def _charts_problem(body: str) -> str | None:
-    """What's wrong with a Charts & Graphs page's data block, or None."""
-    found = _CHARTS_BLOCK_RE.search(body)
-    if not found:
-        return 'it has no <script type="application/json" id="exhibit-charts"> block with its charts'
-    try:
-        config = json.loads(found.group(1))
-    except ValueError as exc:
-        return f"its exhibit-charts block isn't valid JSON ({exc.msg}, line {exc.lineno}): use double quotes, no comments, no trailing commas"
-    charts = config.get("charts") if isinstance(config, dict) else None
-    if not isinstance(charts, list) or not charts:
-        return 'its exhibit-charts block has no charts: it needs {"charts": [ ... ]} with at least one chart'
-    for number, chart in enumerate(charts, 1):
-        if not isinstance(chart, dict):
-            return f"chart {number} in its exhibit-charts block isn't an object"
-        kind = chart.get("type", "line")
-        if kind not in _CHART_TYPES:
-            return f'chart {number} has type {kind!r}; it must be one of {", ".join(_CHART_TYPES)}'
-        if kind in _DATA_CHART_TYPES:
-            if not chart.get("data") and not (chart.get("x") and chart.get("series")):
-                return f'chart {number} ({kind}) has no data: give "data": {{"Label": number, ...}}'
-        elif not chart.get("series"):
-            return f'chart {number} ({kind}) has no series: give "series": {{"Name": [numbers], ...}}'
-    return _stats_problem(config.get("stats"), charts)
+# The view an exhibit opens in ("page", "slides", "document"): the last one the user looked at it in,
+# or, for a new exhibit, the one picked in the format question. An exhibit made from a preset before
+# 0.4.1 opens in that preset's view once it has a freeform version.
+_FIRST_VIEW: dict[str, tuple[float, str]] = {}
+_FIRST_VIEW_TTL = 3600
 
 
-_STAT_VALUES = ("sum", "average", "max", "min", "count", "first", "last", "change", "growth")
+def _view_for_kind(kind: str) -> str:
+    return {"slides": "slides", "document": "document"}.get(kind, "page")
 
 
-def _stats_problem(stats: Any, charts: list[Any]) -> str | None:
-    """What's wrong with a Charts & Graphs page's stat tiles, or None (they're optional)."""
-    if stats is None:
-        return None
-    if not isinstance(stats, list):
-        return '"stats" must be a list of stat tiles'
-    ids = {str(c.get("id") or f"chart-{n}"): c for n, c in enumerate(charts, 1) if isinstance(c, dict)}
-    for number, stat in enumerate(stats, 1):
-        if not isinstance(stat, dict) or not str(stat.get("label") or "").strip():
-            return f'stat {number} needs a "label"'
-        chart = ids.get(str(stat.get("chart")))
-        if chart is None:
-            return (f'stat {number} ({stat["label"]!r}) names chart {stat.get("chart")!r}, which isn\'t in "charts": '
-                    f'use one of their ids ({", ".join(ids)})')
-        if chart.get("type", "line") not in _STAT_CHART_TYPES:
-            return (f'stat {number} ({stat["label"]!r}) uses a {chart.get("type")} chart; stats work on line, area, bar, '
-                    'pie and donut charts')
-        if stat.get("value") not in _STAT_VALUES:
-            return f'stat {number} ({stat["label"]!r}) has value {stat.get("value")!r}; it must be one of {", ".join(_STAT_VALUES)}'
-        series = stat.get("series")
-        if series is not None:
-            names = list(chart["series"]) if isinstance(chart.get("series"), dict) else [
-                s.get("name") for s in chart.get("series") or [] if isinstance(s, dict)]
-            if series not in names:
-                return f'stat {number} ({stat["label"]!r}) names series {series!r}; chart {stat["chart"]!r} has {", ".join(map(str, names)) or "none"}'
-        if stat.get("show") not in (None, "value", "label", "both"):
-            return f'stat {number} ({stat["label"]!r}) has show {stat.get("show")!r}; it must be value, label or both'
-    return None
+def _exhibit_view(meta: dict[str, Any]) -> str:
+    view = meta.get("view")
+    return view if view in _VIEWS else "page"
 
 
-def _kind_name(kind: str) -> str:
-    return {"document": "a document", "slides": "a slide deck", "charts": "a Charts & Graphs page"}.get(
-        kind, "a freeform exhibit")
-
-
-def _check_preset(meta: dict[str, Any] | None, html: str) -> str:
-    """The preset the new version will have, or a _ToolFailure explaining why it isn't allowed."""
-    kind = _page_kind(html) or "freeform"
+def _display_kind(meta: dict[str, Any], version: int | None = None) -> str:
+    """The icon an exhibit gets: an old preset version's kind, else the view it was last seen in."""
+    kind = _exhibit_kind(meta, version)
     if kind != "freeform":
-        problem = _preset_problem(html, kind)
-        if problem:
-            raise _ToolFailure(
-                "preset_structure",
-                f"This page says it's {_kind_name(kind)} but {problem}, so the page control and exports "
-                f"wouldn't work. Keep the preset's structure: start from the {kind} preset's page and keep "
-                "its <style>, its <script> and the parts its comment describes.",
-            )
-    if meta is None:
         return kind
-    current = _exhibit_kind(meta)
-    if kind == current:
-        return kind
-    fixed = {
-        "document": "US Letter pages with the content inside <article class=\"sheet\">",
-        "slides": "16:9 slides in <section class=\"slide\">",
-        "charts": "charts drawn from the <script id=\"exhibit-charts\"> data block",
-    }.get(current, "a freeform page, without a preset")
-    raise _ToolFailure(
-        "preset_locked",
-        f"This exhibit is {_kind_name(current)}, and an exhibit can't change format: {fixed}. The new page "
-        f"is {_kind_name(kind)}, so it wasn't saved. Keep the format and change only the content and look. "
-        "If the user wants something this format can't do (another page or slide size, one continuous "
-        "page, a different kind of exhibit), tell them it isn't possible for this exhibit, and offer to "
-        "make a new exhibit in the format they want instead.",
-    )
+    return {"slides": "slides", "document": "document"}.get(_exhibit_view(meta), "freeform")
+
+
+def _set_view(exhibit_id: Any, view: Any) -> str:
+    if view not in _VIEWS:
+        raise _ToolFailure("invalid_view", "view must be page, slides or document.")
+    with _store_lock:
+        meta = _load_meta(exhibit_id)
+        if meta.get("view") != view:
+            meta["view"] = view
+            _atomic_write(_exhibit_dir(meta["id"]) / "meta.json", json.dumps(meta, indent=1))
+    return view
 
 
 def _save_version(
-    title: Any, html: Any, exhibit_id: Any = None, summary: Any = None, session_id: str | None = None
+    title: Any, html: Any, exhibit_id: Any = None, summary: Any = None, session_id: str | None = None,
+    first_view: str | None = None,
 ) -> tuple[dict[str, Any], int]:
     if not isinstance(html, str) or not html.strip():
         raise _ToolFailure(
@@ -1256,6 +1206,8 @@ def _save_version(
         if exhibit_id:
             meta = _load_meta(exhibit_id)
             kind = _check_preset(meta, html)
+            if "view" not in meta:  # made before 0.4.1: open in its old format's view
+                meta["view"] = _view_for_kind(_exhibit_kind(meta))
             if isinstance(title, str) and title.strip():
                 meta["title"] = _unique_title(title, exclude_id=meta["id"])
         else:
@@ -1265,7 +1217,8 @@ def _save_version(
                 )
             kind = _check_preset(None, html)
             title = _unique_title(title)
-            meta = {"id": _new_exhibit_id(title), "title": title, "created": _now(), "versions": []}
+            meta = {"id": _new_exhibit_id(title), "title": title, "created": _now(), "versions": [],
+                    "view": first_view if first_view in _VIEWS else "page"}
             if session_id:
                 meta["session_id"] = session_id
         if isinstance(summary, str) and summary.strip():
@@ -1640,16 +1593,18 @@ class _Handler(BaseHTTPRequestHandler):
                 else:
                     self._send(200, data, "text/javascript; charset=utf-8", cache="private, max-age=31536000, immutable",
                                headers={"Cross-Origin-Resource-Policy": "cross-origin"})
-            elif len(parts) == 2 and parts[0] == "preset" and parts[1] in ("document", "slides", "charts"):
-                page = (_PRESET_DIR / f"{parts[1]}.html").read_text(encoding="utf-8")
-                self._send(200, _inject_bridge(page, True), "text/html; charset=utf-8", self._page_csp(), cache="no-cache")
             elif len(parts) == 2 and parts[0] == "e":
                 version = query.get("v", [None])[0]
-                self._viewer(parts[1], int(version) if version and version.isdigit() else None)
+                view = query.get("view", [None])[0]
+                self._viewer(parts[1], int(version) if version and version.isdigit() else None,
+                             view if view in _VIEWS else None)
             elif len(parts) == 3 and parts[0] == "raw" and parts[2].isdigit():
                 page, _ = _exhibit_html(parts[1], int(parts[2]))
                 thumbnail = query.get("thumb", [""])[0] == "1"
                 check = query.get("check", [""])[0] == "1"  # show's render check (_render_check)
+                view = query.get("view", [""])[0]  # a freeform page in the viewer's Slides or Document view
+                if view in ("slides", "document") and not thumbnail and not check and _page_kind(page) == "":
+                    page = _insert_in_head(page, _mold_scripts(view, view=True))
                 # A version's file is written once and never changes (an edit adds a new version with
                 # a new address), so the browser can keep it: pages and thumbnails only fetch and
                 # re-run an exhibit again after it's edited. The address also carries the build (?b=),
@@ -1663,9 +1618,15 @@ class _Handler(BaseHTTPRequestHandler):
                 version = query.get("v", [None])[0]
                 chosen = int(version) if version and version.isdigit() else None
                 fmt = query.get("format", ["html"])[0]
+                item = query.get("item", [None])[0] or None  # one chart or diagram (the item rail)
+                item_name = (query.get("iname", [""])[0] or "")[:80] or None
+                if item and fmt not in ("pdf", "html"):
+                    self._json(400, {"error": "A chart or diagram exports as PDF, HTML or PNG."})
+                    return
+                mold = query.get("mold", [None])[0] or None  # a freeform page as slides or a document
                 if fmt == "pdf":
                     try:
-                        name, body = _export_pdf(parts[1], chosen)
+                        name, body = _export_pdf(parts[1], chosen, item, item_name, mold)
                     except _ToolFailure as exc:
                         self._json(503, {"error": exc.error, "error_code": exc.error_code})
                         return
@@ -1677,7 +1638,7 @@ class _Handler(BaseHTTPRequestHandler):
                     name, body = _export_markdown_zip(parts[1], chosen)
                     kind = "application/zip"
                 else:
-                    name, body = _export_html(parts[1], chosen)
+                    name, body = _export_html(parts[1], chosen, item, item_name)
                     kind = "text/html; charset=utf-8"
                 fallback = "exhibit" + Path(name).suffix
                 ascii_name = re.sub(r"[^A-Za-z0-9._ -]+", "", name).strip() or fallback
@@ -1711,7 +1672,8 @@ class _Handler(BaseHTTPRequestHandler):
         is_data = len(parts) == 3 and parts[0] == "api" and parts[2] == "data"
         is_title = len(parts) == 3 and parts[0] == "api" and parts[2] == "title"
         is_delete = len(parts) == 3 and parts[0] == "api" and parts[2] == "delete"
-        if not (is_data or is_title or is_delete or parts == ["api", "tabs"]):
+        is_view = len(parts) == 3 and parts[0] == "api" and parts[2] == "view"
+        if not (is_data or is_title or is_delete or is_view or parts == ["api", "tabs"]):
             self._send(404, "Not found", "text/plain")
             return
         if self._cross_site() or self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -1728,6 +1690,9 @@ class _Handler(BaseHTTPRequestHandler):
                     return
                 _delete_exhibit(parts[1])
                 self._json(200, {"ok": True, "tabs": _load_tabs()})
+            elif is_view:
+                view = request.get("view") if isinstance(request, dict) else None
+                self._json(200, {"ok": True, "view": _set_view(parts[1], view)})
             elif is_title:
                 title = request.get("title") if isinstance(request, dict) else None
                 self._json(200, {"ok": True, "title": _rename_exhibit(parts[1], title)["title"]})
@@ -1775,11 +1740,11 @@ class _Handler(BaseHTTPRequestHandler):
             on = " on" if exhibit_id == current else ""
             rows.append(
                 f'<div class="row{on}" title="{name}"><a href="{base}e/{exhibit_id}">'
-                f'{_kind_icon(_exhibit_kind(meta))}<span class="lbl">{name}</span></a>'
+                f'{_kind_icon(_display_kind(meta))}<span class="lbl">{name}</span></a>'
                 f'<button class="x" data-close="{exhibit_id}" aria-label="Close {name}">&times;</button></div>'
             )
         everything = [
-            {"id": m["id"], "title": m["title"], "summary": m.get("summary") or "", "kind": _exhibit_kind(m)}
+            {"id": m["id"], "title": m["title"], "summary": m.get("summary") or "", "kind": _display_kind(m)}
             for m in _list_exhibits()
         ]
         pins = _load_pins()
@@ -1799,12 +1764,14 @@ class _Handler(BaseHTTPRequestHandler):
         config = json.dumps(
             {"base": base, "current": current, "all": everything, "icons": icons, "pins": pins}, ensure_ascii=False
         ).replace("</", "<\\/")
-        collapsed = " collapsed" if _load_ui().get("panel_collapsed") else ""
+        # Opening an exhibit collapses the column, giving the exhibit the room (the rail's Exhibits button
+        # brings it back); elsewhere it's shown or hidden as the user left it.
+        collapsed = " collapsed" if current not in (None, "new") or _load_ui().get("panel_collapsed") else ""
         exhibits_on = " on" if current is None else ""
         new_on = " on" if current == "new" else ""
         return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html_lib.escape(title)}</title><style>{_SHELL_STYLE}</style></head><body class="{collapsed.strip()}">
+<title>{html_lib.escape(title)}</title><style>{_SHELL_STYLE.replace("__SCROLLBAR_CSS__", _SCROLLBAR_CSS)}</style></head><body class="{collapsed.strip()}">
 <nav class="rail" aria-label="WorkSwarm">{logo}
 <a class="rail-item{exhibits_on}" id="rail-exhibits" href="{base}">{_EXHIBITS_ICON}<span>Exhibits</span></a></nav>
 <aside class="panel" aria-label="Exhibits">
@@ -1815,7 +1782,7 @@ class _Handler(BaseHTTPRequestHandler):
 <a class="nav-row{exhibits_on}" href="{base}">{_GRID_ICON}Exhibits Gallery</a>
 <div id="pinned-section"{"" if pinned_rows else " hidden"}><div class="panel-label">Pinned</div>
 <div class="tab-list" id="pinned">{"".join(pinned_rows)}</div></div>
-<div id="open-section"><div class="panel-label">Open</div>
+<div id="open-section"><div class="panel-label">Recently opened</div>
 <div class="tab-list" id="tabs">{"".join(rows)}</div>
 <p class="panel-empty" id="tabs-empty"{" hidden" if rows else ""}>Exhibits you open appear here.</p></div>
 </aside>
@@ -1887,10 +1854,11 @@ if (config.current !== null) {{
 {script}
 </script></body></html>"""
 
-    def _viewer(self, exhibit_id: str, version: int | None) -> None:
+    def _viewer(self, exhibit_id: str, version: int | None, view: str | None = None) -> None:
         meta = _load_meta(exhibit_id)
-        _, chosen = _exhibit_html(exhibit_id, version)
+        page, chosen = _exhibit_html(exhibit_id, version)
         _open_tab(exhibit_id)
+        items = _has_items(page)  # freeform with kit charts or diagrams: the item rail, not Edit data in the bar
         base = f"/{self.token}/"
         title = html_lib.escape(meta["title"])
         latest = len(meta["versions"])
@@ -1906,29 +1874,134 @@ if (config.current !== null) {{
                     f'<a role="menuitem" href="?v={number}"{current}>Version {number}{newest}'
                     f'<span class="when">{when}</span></a>'
                 )
-            items = "".join(entries)
+            version_items = "".join(entries)
             old = " old" if chosen != latest else ""
             versions = (
                 f'<div class="ver"><button class="ver-btn{old}" id="ver-btn" type="button" aria-haspopup="menu" '
                 f'aria-expanded="false" title="Versions">{_HISTORY_ICON}<span>Version {chosen} of {latest}</span>'
-                f'{_CHEVRON_ICON}</button><div class="ver-menu" id="ver-menu" role="menu" hidden>{items}</div></div>'
+                f'{_CHEVRON_ICON}</button><div class="ver-menu" id="ver-menu" role="menu" hidden>{version_items}</div></div>'
             )
         kind = _exhibit_kind(meta, chosen)  # of the version shown
+        # Freeform pages can be viewed as they are, as slides or as document pages (0.4.1); the view decides
+        # what Export offers and the exhibit's icon. Old preset versions have one view.
+        view = (view or _exhibit_view(meta)) if kind == "freeform" else "page"
+        if kind == "freeform" and view != _exhibit_view(meta):
+            _set_view(exhibit_id, view)  # opened in another view (a link, the address): that's the last one now
+        icon_kind = kind if kind != "freeform" else {"slides": "slides", "document": "document"}.get(view, "freeform")
+        paged = kind if kind in ("slides", "document") else view if view != "page" else ""
+        switch = ""
+        if kind == "freeform":
+            keep = f"&v={chosen}" if version is not None else ""
+            links = "".join(
+                f'<a href="?view={name}{keep}" data-view="{name}"' + (' aria-current="page"' if name == view else "") + f">{label}</a>"
+                for name, label in (("page", "Page"), ("slides", "Slides"), ("document", "Document")))
+            switch = f'<nav class="views" aria-label="View">{links}</nav>'
+            if view != "page":
+                versions = versions.replace('href="?v=', f'href="?view={view}&v=')
+        # Slides and Document views: every slide or page as a thumbnail, with the page control on top.
+        thumbs_panel = ""
+        if switch:
+            thumbs_panel = (f'<aside class="pp" id="thumbs" aria-label="Pages"{" hidden" if view == "page" else ""}>'
+                            f'<div class="pp-head">{_pager_markup("document")}</div>'
+                            f'<div class="pp-list" id="thumbs-list"></div></aside>')
         main = f"""<main class="viewer"><header class="vbar">
-{_kind_icon(kind)}<input class="title-input" id="title" value="{title}" maxlength="{_MAX_TITLE_CHARS}" aria-label="Exhibit title" title="Rename" spellcheck="false">
-{_pager_markup(kind) if kind in ("slides", "document") else ""}{versions}<button class="data-btn" id="data-btn" type="button" hidden aria-expanded="false" aria-controls="data-panel" title="Edit the data behind the charts">{_PENCIL_ICON}<span class="label">Edit data</span></button><div class="tools">
+<span id="view-icon">{_kind_icon(icon_kind)}</span><input class="title-input" id="title" value="{title}" maxlength="{_MAX_TITLE_CHARS}" aria-label="Exhibit title" title="Rename" spellcheck="false">
+{switch}{_pager_markup(paged) if paged and not switch else ""}{versions}<button class="data-btn" id="data-btn" type="button" hidden aria-expanded="false" aria-controls="data-panel" title="Edit the data behind the charts">{_PENCIL_ICON}<span class="label">Edit data</span></button><div class="tools">
 <button class="bar-icon" id="export" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Export" title="Export">{_EXPORT_ICON}</button>
 <button class="bar-icon" id="copy-ref" type="button" aria-label="Copy reference" title="Copy reference (paste it into a WorkSwarm chat)">{_LINK_ICON}</button>
 <button class="bar-icon danger" id="delete-exhibit" type="button" aria-label="Delete exhibit" title="Delete">{_TRASH_ICON}</button></div></header>
-<div class="vbody"><iframe id="exhibit" title="{title}" sandbox="{_FRAME_SANDBOX}" src="{base}raw/{exhibit_id}/{chosen}?b={_page_version()}"></iframe>
+<div class="vbody">{thumbs_panel}<iframe id="exhibit" title="{title}" sandbox="{_FRAME_SANDBOX}" src="{base}raw/{exhibit_id}/{chosen}?b={_page_version()}{"&view=" + view if view != "page" else ""}"></iframe>
+<div class="frame-loading" id="frame-loading" role="status" aria-label="Loading"><span class="spinner"></span></div>
 <div class="dp-resize" id="dp-resize" role="separator" aria-orientation="vertical" aria-label="Resize the Edit data panel" title="Drag to resize" tabindex="0" hidden></div>
 <aside class="data-panel" id="data-panel" aria-label="Edit data" hidden></aside></div></main>
 <button class="quote-btn" id="quote-btn" type="button" hidden>{_QUOTE_ICON}Quote</button>"""
         printable = "true" if kind in ("document", "slides", "charts") else "false"
+        raw_url = json.dumps(f"{base}raw/{exhibit_id}/{chosen}?b={_page_version()}")
         markdown = "true" if kind == "document" else "false"
         data_url = json.dumps(f"{base}api/{exhibit_id}/data")
         title_url = json.dumps(f"{base}api/{exhibit_id}/title")
         script = f"""const frame = document.getElementById("exhibit");
+// The view of a freeform exhibit ("page", "slides", "document"): switched in place, without reloading
+// the viewer, behind a loading cover until the exhibit has been laid out in the new view.
+let currentView = {json.dumps(view)}, pagerKind = {json.dumps(paged or "document")};
+const rawUrl = {raw_url}, keepVersion = {json.dumps(f"&v={chosen}" if version is not None else "")};
+const frameCover = document.getElementById("frame-loading");
+let frameLoaded = false, framePaged = false, frameReady = false, coverTimer = 0;
+const uncover = () => {{
+  clearTimeout(coverTimer);
+  const was = frameCover.hidden;
+  frameCover.hidden = true;
+  frame.classList.remove("loading");
+  if (!was) window.dispatchEvent(new Event("exhibit-shown"));
+}};
+// Where the user was in each view (the scroll position, or the slide), kept in this browser and put back
+// before the exhibit is shown again: on a switch, a reload, or opening the exhibit later.
+const placeKey = (view) => "exhibit-place:" + config.current + ":" + view;
+const loadPlace = () => {{ try {{ return Number(localStorage.getItem(placeKey(currentView))) || 0; }} catch (e) {{ return 0; }} }};
+const savePlace = (value) => {{ try {{ localStorage.setItem(placeKey(currentView), String(Math.round(value))); }} catch (e) {{}} }};
+let placeWait = null;
+window.addEventListener("message", (event) => {{
+  if (event.source !== frame.contentWindow || !event.data) return;
+  const m = event.data;
+  if (m.channel === "exhibit-scroll" && typeof m.y === "number" && frameReady && currentView !== "slides") savePlace(m.y);
+  if (m.channel === "exhibit-pages" && Number.isInteger(m.current) && frameReady && currentView === "slides") savePlace(m.current);
+  if (placeWait && (m.channel === "exhibit-scrolled" || (m.channel === "exhibit-pages" && m.current === placeWait.slide))) placeWait.done();
+}});
+const restorePlace = () => new Promise((resolve) => {{
+  const saved = document.querySelector(".views") ? loadPlace() : 0;
+  if (!saved) return resolve();
+  const timer = setTimeout(() => {{ placeWait = null; resolve(); }}, 600);
+  placeWait = {{ slide: currentView === "slides" ? saved : null, done: () => {{ clearTimeout(timer); placeWait = null; requestAnimationFrame(() => resolve()); }} }};
+  if (currentView === "slides") frame.contentWindow.postMessage({{ channel: "exhibit-pages", op: "goto", page: saved }}, "*");
+  else frame.contentWindow.postMessage({{ channel: "exhibit-scroll-to", y: saved }}, "*");
+}});
+const coverUntilReady = () => {{
+  frameLoaded = framePaged = frameReady = false;
+  frameCover.hidden = false;
+  frame.classList.add("loading");
+  clearTimeout(coverTimer);
+  coverTimer = setTimeout(uncover, 10000);  // never left covered
+}};
+// Ready: loaded, and in the Slides and Document views laid out (the page reports its slides or pages).
+const maybeReady = () => {{
+  if (frameReady || !frameLoaded || (currentView !== "page" && !framePaged)) return;
+  frameReady = true;
+  setTimeout(() => restorePlace().then(uncover), currentView === "document" ? 250 : 0);
+}};
+frame.addEventListener("load", () => {{ frameLoaded = true; maybeReady(); }});
+window.addEventListener("message", (event) => {{
+  if (event.source === frame.contentWindow && event.data && event.data.channel === "exhibit-pages") {{ framePaged = true; maybeReady(); }}
+}});
+coverUntilReady();
+const switchView = (next) => {{
+  if (next === currentView) return;
+  currentView = next;
+  if (next !== "page") pagerKind = next;
+  // The exhibit remembers the view it was last seen in; its icon (here and in the column) shows it.
+  fetch(config.base + "api/" + config.current + "/view", {{ method: "PUT", headers: {{ "Content-Type": "application/json" }},
+    body: JSON.stringify({{ view: next }}) }}).catch(() => {{}});
+  const icon = config.icons[next === "page" ? "freeform" : next] || "";
+  document.getElementById("view-icon").innerHTML = icon;
+  document.querySelectorAll(".row.on a .kind").forEach((k) => {{ k.outerHTML = icon; }});
+  document.querySelectorAll(".views a").forEach((a) => a.toggleAttribute("aria-current", a.dataset.view === next));
+  document.querySelectorAll(".views a[aria-current]").forEach((a) => a.setAttribute("aria-current", "page"));
+  const pagerBox = document.getElementById("pager");
+  if (pagerBox) pagerBox.hidden = true;
+  const query = (next === "page" ? "" : "view=" + next) + keepVersion;
+  history.replaceState(null, "", "?" + query.replace(/^&/, ""));
+  document.querySelectorAll("#ver-menu a").forEach((a) => {{
+    const v = new URLSearchParams(a.getAttribute("href").slice(1)).get("v");
+    a.setAttribute("href", "?" + (next === "page" ? "" : "view=" + next + "&") + "v=" + v);
+  }});
+  window.dispatchEvent(new CustomEvent("exhibit-view", {{ detail: next }}));
+  coverUntilReady();
+  frame.src = rawUrl + (next === "page" ? "" : "&view=" + next);
+}};
+document.querySelectorAll(".views a").forEach((a) => a.addEventListener("click", (e) => {{
+  if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
+  e.preventDefault();
+  switchView(a.dataset.view);
+}}));
 // Rename: edit the title in place; Enter or leaving the field saves, Esc cancels.
 const titleBox = document.getElementById("title");
 let savedTitle = titleBox.value;
@@ -1972,6 +2045,21 @@ const exportAs = (format, what) => {{
   link.remove();
   toast("Exported \u201c" + savedTitle + "\u201d as " + what + ".");
 }};
+const exportMold = async (mold, what) => {{
+  toast("Making the PDF…");
+  try {{
+    const r = await fetch(config.base + "api/" + config.current + "/export?v={chosen}&format=pdf&mold=" + mold);
+    if (!r.ok) throw new Error("PDF export failed");
+    const header = r.headers.get("Content-Disposition") || "";
+    const named = /filename\\*=UTF-8''([^;]+)/.exec(header);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(await r.blob());
+    link.download = named ? decodeURIComponent(named[1]) : "exhibit.pdf";
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    toast("Exported “" + savedTitle + "” as " + what + " PDF.");
+  }} catch (err) {{ toast("Couldn’t make the PDF: " + ((err && err.message) || err)); }}
+}};
 document.getElementById("export").addEventListener("click", (e) => {{
   e.stopPropagation();
   const formats = [{{ label: "HTML file (.html)", run: () => exportAs("", "an HTML file") }}];
@@ -1979,6 +2067,11 @@ document.getElementById("export").addEventListener("click", (e) => {{
     {{ label: "Markdown (.md)", run: () => exportAs("md", "Markdown") }},
     {{ label: "Markdown with images (.zip)", run: () => exportAs("md-zip", "Markdown with its images") }},
   );
+  // A freeform page in its Slides or Document view exports as that: a PDF of those slides or pages, and
+  // nothing else. Switch the view to export in another form.
+  const moldView = currentView === "page" ? "" : currentView;
+  if (moldView) return openMenu(e.currentTarget, [{{ label: "PDF (.pdf)",
+    run: () => exportMold(moldView, moldView === "slides" ? "slides" : "a document") }}]);
   if ({printable}) formats.push({{ label: "PDF (.pdf)", run: async () => {{
     // The server has a hidden browser print the page on its own, with its print layout (one slide per
     // page, and so on). Printing from this viewer instead goes through the sandboxed frame, where
@@ -2061,9 +2154,14 @@ window.addEventListener("message", async (event) => {{
   }}
   frame.contentWindow.postMessage({{ channel: "exhibit", reqId: m.reqId, ...reply }}, "*");
 }});"""
-        script += _DATA_PANEL_SCRIPT
-        if kind in ("slides", "document"):
-            script += f"\nconst pagerKind = {json.dumps(kind)};" + _VIEWER_PAGES_SCRIPT
+        script += f"\nconst dataInBar = {'false' if items else 'true'};" + _DATA_PANEL_SCRIPT
+        if items:
+            icons = json.dumps({"export": _EXPORT_ICON, "edit": _PENCIL_ICON, "ref": _LINK_ICON})
+            script += f"\nconst shownVersion = {chosen}, RAIL_ICONS = {icons};" + _ITEM_RAIL_SCRIPT
+        if paged or switch:
+            script += _VIEWER_PAGES_SCRIPT
+        if switch:
+            script += _THUMBS_VIEWER_SCRIPT
         nonce = secrets.token_urlsafe(12)
         self._send(200, self._page(meta["title"], main, exhibit_id, nonce, script),
                    "text/html; charset=utf-8", self._shell_csp(nonce))
@@ -2074,11 +2172,7 @@ window.addEventListener("message", async (event) => {{
         base = f"/{self.token}/"
         cards = []
         for kind, (name, description) in _NEW_PAGE_FORMATS.items():
-            if kind == "freeform":
-                thumb = f'<div class="thumb blank-thumb">{_kind_icon("freeform")}</div>'
-            else:
-                thumb = (f'<div class="thumb"><iframe loading="lazy" tabindex="-1" aria-hidden="true" title="" scrolling="no" '
-                         f'sandbox="{_FRAME_SANDBOX}" src="{base}preset/{kind}?b={_page_version()}"></iframe></div>')
+            thumb = f'<div class="thumb blank-thumb">{_kind_icon(kind)}</div>'
             cards.append(
                 f'<button class="card format-card" type="button" data-kind="{kind}">{thumb}'
                 f'<div class="card-body"><div class="card-head">{_kind_icon(kind)}<div class="card-title">'
@@ -2123,7 +2217,7 @@ document.querySelectorAll(".format-card").forEach((card) => card.addEventListene
                 f' data-id="{exhibit_id}" src="{base}raw/{exhibit_id}/{len(meta["versions"])}?thumb=1&b={_page_version()}"></iframe>'
             )
             href = f"{base}e/{exhibit_id}"
-            icon = _kind_icon(_exhibit_kind(meta))
+            icon = _kind_icon(_display_kind(meta))
             pin_label = "Unpin" if pinned else "Pin"
             more = (
                 f'<button class="pin-btn{" on" if pinned else ""}" type="button" data-pin="{exhibit_id}" '
@@ -2985,14 +3079,17 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
       el.style.height = (spec.height ? Math.max(spec.height, need) : need || 360) + "px";
     }
     const original = { ...spec };
-    // What the render check reads: each chart's title (for the note on a heading that repeats it).
+    const ref = String(spec.id || el.id || "chart-" + index);
+    // What the render check reads: each chart's title (for the note on a heading that repeats it), and
+    // what the viewer's item rail reads: the chart's name and the key its data is saved under.
     try {
       const info = window.__exhibitChartInfo || (window.__exhibitChartInfo = new Map());
-      info.set(el, { title: spec.title || "", unnamed: VALUE_AXIS.includes(spec.type || "line") && !String(spec.yLabel || "").trim() });
+      info.set(el, { title: spec.title || "", ref, key: "chart-data:" + ref,
+        unnamed: VALUE_AXIS.includes(spec.type || "line") && !String(spec.yLabel || "").trim() });
     } catch (e) {}
     let editable = false;
     try { toTable(spec); editable = true; } catch (e) {}  // every chart whose data reads as a table
-    const key = "chart-data:" + (spec.id || el.id || "chart-" + index);
+    const key = "chart-data:" + ref;
     const saved = editable && typeof host.get === "function"
       ? withTimeout(Promise.resolve().then(() => host.get(key)).catch(() => undefined), 1500) : Promise.resolve(undefined);
     return Promise.all([loadEcharts(), saved]).then(([echarts, edits]) => {
@@ -3024,6 +3121,7 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
         inst.resize();
       };
       if (window.ResizeObserver) { entry.observer = new ResizeObserver(onResize); entry.observer.observe(el); }
+      try { window.__exhibitChartInfo.get(el).editable = editable; } catch (e) {}  // the item rail's Edit data
       if (editable) {
         entry.key = key; entry.original = original; entry.base = base;
         entry.pristine = JSON.stringify(toTable(original));
@@ -3930,13 +4028,34 @@ def _export_name(title: str) -> str:
     return name + ".html"
 
 
-def _export_html(exhibit_id: str, version: int | None) -> tuple[str, str]:
-    """A standalone HTML file of one version (the latest by default), with its saved data built in."""
+_ITEM_ID_RE = re.compile(r"^(chart|diagram):[^\x00-\x1f<>]{1,120}$")
+
+
+_TEXT_ITEM_RE = re.compile(r"""<pre[\s>]|class\s*=\s*["'][^"']*\bex-(?:callout|panel)\b""", re.I)
+
+
+def _has_items(page: str) -> bool:
+    """Freeform pages with kit charts or diagrams get the viewer's item rail (0.4.1), and so do pages with
+    callouts, panels or code blocks, which get a Copy button."""
+    return _page_kind(page) == "" and (_uses_chart_kit(page) or _uses_diagram_kit(page) or bool(_TEXT_ITEM_RE.search(page)))
+
+
+def _export_html(exhibit_id: str, version: int | None, item: str | None = None,
+                 item_name: str | None = None) -> tuple[str, str]:
+    """A standalone HTML file of one version (the latest by default), with its saved data built in.
+    With item ("chart:sales", "diagram:2"), only that chart or diagram shows."""
     meta = _load_meta(exhibit_id)
     page, _ = _exhibit_html(exhibit_id, version)
     script = _standalone_bridge(exhibit_id)
+    title = meta["title"]
+    if item:
+        if not _ITEM_ID_RE.match(item):
+            raise _ToolFailure("invalid_item", "That isn't a chart or diagram on this page.")
+        script += _ITEMS_SCRIPT + _item_only_script(item)
+        if item_name:
+            title = f"{title} - {item_name}"
     script += _preset_scripts(page, False)  # an exported deck draws its own slide buttons
-    return _export_name(meta["title"]), _insert_in_head(page, script)
+    return _export_name(title), _insert_in_head(page, script)
 
 
 # Markdown export for documents. The document preset is static HTML with known parts, so it's
@@ -4363,9 +4482,17 @@ def _pdf_browser() -> str | None:
     return next((c for c in candidates if c and os.path.isfile(c)), None)
 
 
-def _export_pdf(exhibit_id: str, version: int | None) -> tuple[str, bytes]:
-    """A PDF of one version, printed by a headless browser with the page's own print layout."""
-    name, page = _export_html(exhibit_id, version)
+def _export_pdf(exhibit_id: str, version: int | None, item: str | None = None,
+                item_name: str | None = None, mold: str | None = None) -> tuple[str, bytes]:
+    """A PDF of one version, printed by a headless browser with the page's own print layout.
+    With item, only that chart or diagram. With mold ("slides" or "document"), a freeform page laid
+    out as a deck or as document pages."""
+    name, page = _export_html(exhibit_id, version, item, item_name)
+    if mold:
+        if mold not in _MOLDS:
+            raise _ToolFailure("invalid_mold", "A page can be printed as slides or as a document.")
+        page = _insert_in_head(page, _MOLDS[mold])
+        name = name[: -len(".html")] + (" (slides)" if mold == "slides" else "") + ".html"
     browser = _pdf_browser()
     if browser is None:
         raise _ToolFailure("pdf_unavailable", "No Edge or Chrome was found to make the PDF.")
@@ -4375,7 +4502,9 @@ def _export_pdf(exhibit_id: str, version: int | None) -> tuple[str, bytes]:
     # Paper mode from the start: kits draw their printed form (a diagram without its controls, at the
     # page width), so a document's page breaks are measured on what's printed.
     paper = '<script>document.documentElement.classList.add("exhibit-paper")</script>'
-    page = _insert_in_head(page, policy + paper)
+    # The page is printed from a file, where a page without its own <meta charset> would be read as
+    # Windows-1252 (em dashes came out as "â€”"); the first charset declaration wins.
+    page = _insert_in_head(page, '<meta charset="utf-8">' + policy + paper)
     # The browser may still hold files in its profile when we're done, so cleanup is best effort.
     with tempfile.TemporaryDirectory(prefix="exhibit-pdf-", ignore_cleanup_errors=True) as work:
         folder = Path(work)
@@ -4384,7 +4513,14 @@ def _export_pdf(exhibit_id: str, version: int | None) -> tuple[str, bytes]:
         command = [
             browser, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
             "--disable-extensions", "--hide-scrollbars", "--no-pdf-header-footer",
-            "--virtual-time-budget=5000",  # let scripts finish (charts, fitting text) before printing
+            # let scripts finish (charts, fitting text; a mold waits for diagrams, then lays out) before printing
+            f"--virtual-time-budget={10000 if mold else 5000}",
+            # A mold reads the page's layout before it moves blocks: lay it out at a desktop width, as in
+            # the viewer, not the headless default of 800 px.
+            *(["--window-size=1280,900"] if mold == "slides" else []),
+            # The document mold paginates the screen layout: make the window a Letter page (816 x 1056 px)
+            # so a page sized by the window (vw, vh) lays out the same on screen as on paper.
+            *(["--window-size=816,1056"] if mold == "document" else []),
             f"--user-data-dir={folder / 'profile'}", f"--print-to-pdf={target}", source.as_uri(),
         ]
         deadline = time.monotonic() + _PDF_TIMEOUT
@@ -4533,8 +4669,22 @@ _CHECK_SCRIPT = "<script>" + r"""(() => {
       try { scan(sheet.cssRules); } catch (e) {}
     }
     const selfNumbered = [...document.querySelectorAll(".ex-refs > li")].filter((li) => /^\s*\[?\d+[.)\]]\s/.test(li.textContent)).map((li) => clip(li.textContent, 40));
+    // Page width (2026-11-13): the content column, the narrowest box that still holds 80% of the page's
+    // text. Recent freeform pages kept to 800-1150 px, but some ran the full window. Pages with little
+    // text (apps, games) are left alone.
+    const total = (document.body && document.body.innerText || "").length;
+    let column = 0;
+    if (total >= 600) {
+      column = document.documentElement.clientWidth;
+      for (const el of document.querySelectorAll("body, body *")) {
+        if (kit(el)) continue;
+        const s = getComputedStyle(el), w = el.getBoundingClientRect().width - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight);
+        if (w >= 300 && w < column && (el.innerText || "").length >= total * 0.8) column = w;
+      }
+      column = Math.round(column);
+    }
     return { tables, nav: [...nav].map((el) => clip(el.innerText, 60)), emoji, boxes: boxes.map((el) => clip(el.innerText, 50)), titles, unnamed, lone,
-      restyled: [...restyled].slice(0, 8), selfNumbered };
+      restyled: [...restyled].slice(0, 8), selfNumbered, column, window: document.documentElement.clientWidth };
   };
   const write = () => {
     const diagrams = [...document.querySelectorAll(".exhibit-diagram-wrap")].map((w) => {
@@ -4668,8 +4818,13 @@ def _page_rules(report: dict, kind: str) -> list[str]:
     return problems
 
 
+# Freeform page width: the rounded average of recent freeform pages' content columns (800-1152 px, mean
+# about 934, measured 2026-11-13), and the Slides view's canvas width.
+_MAX_COLUMN = 960
+
+
 def _layout_note(report: dict, kind: str) -> str | None:
-    """Advice that doesn't stop show: prose put in boxes (freeform pages), value axes with no name, score
+    """Advice that doesn't stop show: prose put in boxes and over-wide pages (freeform pages), value axes with no name, score
     bars standing alone, and charts under a heading that
     repeats their title (every format)."""
     found = report.get("layout") or {}
@@ -4681,6 +4836,12 @@ def _layout_note(report: dict, kind: str) -> str | None:
             f"box or card ({_quote_list(boxes)}). Explanation reads best as plain paragraphs under headings; keep "
             "boxes for things the reader uses or looks at (a widget, a chart). Unbox it next time you change the "
             "page, unless the box marks something the reader must not miss.")
+    column = found.get("column") or 0
+    if kind == "freeform" and column > _MAX_COLUMN + 80:
+        notes.append(
+            f"The page's content runs {column} px wide in a {found.get('window') or 1280} px window. Long lines are "
+            f"hard to read: keep freeform pages to one centered column, max-width {_MAX_COLUMN}px with margin 0 auto "
+            "(see \"Page width\" in the exhibit instructions), and call show again with this exhibit_id.")
     titles = found.get("titles") or []
     if titles:
         notes.append(
@@ -4812,7 +4973,7 @@ _SLIDES_SCRIPT = """<script>(() => {
     current = Math.max(0, Math.min(slides.length - 1, n));
     slides.forEach((s, k) => s.classList.toggle("active", k === current));
     report();
-    const bridge = window.exhibit;
+    const bridge = window.__exhibitMoldView ? null : window.exhibit;  // a freeform page's Slides view: the viewer remembers the slide
     if (save && !thumbnail && bridge) { try { bridge.set("slide", current).catch(() => {}); } catch (err) {} }
   };
   const NEXT = ["ArrowRight", "ArrowDown", "PageDown", " ", "Enter"];
@@ -4850,8 +5011,11 @@ _SLIDES_SCRIPT = """<script>(() => {
     else if (m.op === "key") key(m.key);
     else if (m.op === "hello") report();
   });
+  // A freeform page in the Slides view (the slides mold) builds its slides after load, as .exhibit-page,
+  // and says when they're ready.
+  addEventListener("exhibit-slides-ready", () => start());
   const start = () => {
-    slides = [...document.querySelectorAll(".slide")];
+    slides = [...document.querySelectorAll(window.__exhibitSlideSelector || ".slide")];
     if (!slides.length) return;
     const shown = slides.findIndex((s) => s.classList.contains("active"));
     go(shown >= 0 ? shown : 0, false);
@@ -4865,7 +5029,7 @@ _SLIDES_SCRIPT = """<script>(() => {
       document.body.appendChild(nav);
       report();
     }
-    const bridge = window.exhibit;
+    const bridge = window.__exhibitMoldView ? null : window.exhibit;  // a freeform page's Slides view: the viewer remembers the slide
     if (!thumbnail && bridge) {
       Promise.resolve().then(() => bridge.get("slide"))
         .then((saved) => { if (Number.isInteger(saved)) go(saved, false); }).catch(() => {});
@@ -4933,6 +5097,12 @@ dataResize.addEventListener("keydown", (e) => {
 });
 const dataNotes = {};
 window.exhibitDataCharts = () => dataCharts;
+// The item rail's Edit data button: open the panel on that chart, or close it when it's already showing it.
+const toggleChartData = (key) => {
+  if (dataOpen && dataKey === key) return setDataOpen(false);
+  dataKey = key;
+  setDataOpen(true);
+};
 const GRIP_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>';
 let dragFrom = null;
 const CROSS_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>';
@@ -5120,7 +5290,7 @@ window.addEventListener("message", (event) => {
   if (m.channel === "exhibit-charts" && Array.isArray(m.charts)) {
     const before = JSON.stringify(dataCharts);
     dataCharts = m.charts.filter((c) => c && c.key && c.table && Array.isArray(c.table.rows));
-    dataBtn.hidden = !dataCharts.length;
+    dataBtn.hidden = !dataInBar || !dataCharts.length;
     if (!dataCharts.length) setDataOpen(false);
     else if (dataOpen && JSON.stringify(dataCharts) !== before) {
       const typing = document.activeElement && document.activeElement.tagName === "INPUT" && dataPanel.contains(document.activeElement);
@@ -5134,8 +5304,10 @@ window.addEventListener("message", (event) => {
 });
 // Export > PNG: the page draws itself as an image (the whole page, as shown) and hands it over.
 let pngCount = 0;
-const exportPng = () => new Promise((resolve) => {
+const exportPng = (item) => new Promise((resolve) => {
+  item = item && item.id ? item : null;
   const reqId = "png" + (++pngCount);
+  const named = item ? savedTitle + " - " + item.name : savedTitle;
   toast("Making the PNG\u2026");
   const done = (event) => {
     const m = event.data;
@@ -5143,14 +5315,143 @@ const exportPng = () => new Promise((resolve) => {
     window.removeEventListener("message", done);
     if (!m.url) { toast("Couldn\u2019t make the PNG: " + (m.error || "unknown error")); return resolve(); }
     const link = document.createElement("a");
-    link.href = m.url; link.download = savedTitle.replace(/[\\\\/:*?"<>|]+/g, " ").trim() + ".png";
+    link.href = m.url; link.download = named.replace(/[\\\\/:*?"<>|]+/g, " ").trim() + ".png";
     document.body.append(link); link.click(); link.remove();
-    toast("Exported \u201c" + savedTitle + "\u201d as a PNG image.");
+    toast("Exported \u201c" + named + "\u201d as a PNG image.");
     resolve();
   };
   window.addEventListener("message", done);
-  tellFrame({ channel: "exhibit-snapshot", reqId });
+  tellFrame({ channel: "exhibit-snapshot", reqId, item: item ? item.id : undefined });
 });
+"""
+
+
+# Item rail (0.4.1): the buttons beside each kit chart and diagram (and Copy beside callouts, panels and code blocks) are drawn in the page (_ITEMS_SCRIPT,
+# in a closed shadow root, so they scroll with it); the viewer does what they ask for: the Export menu
+# (PNG, PDF, HTML of that item), Edit data on that chart, and copying a reference to it. It tells the
+# page which chart the Edit data panel shows, so that button shows as pressed.
+_ITEM_RAIL_SCRIPT = r"""
+const railAnchor = document.createElement("div");
+railAnchor.style.cssText = "position:fixed;pointer-events:none;width:1px;height:1px;left:0;top:0";
+document.body.appendChild(railAnchor);
+const railName = (it) => (it.kind === "chart" ? "chart" : "diagram") + " “" + it.name + "”";
+// PDF and HTML of one item: made on the server (the page with everything else hidden), then downloaded.
+const exportItem = async (it, format, what) => {
+  toast("Making the " + what + "…");
+  try {
+    const url = config.base + "api/" + config.current + "/export?v=" + shownVersion + "&format=" + format
+      + "&item=" + encodeURIComponent(it.id) + "&iname=" + encodeURIComponent(it.name);
+    const r = await fetch(url);
+    if (!r.ok) { let j = {}; try { j = await r.json(); } catch (e) {} throw new Error(j.error || what + " export failed"); }
+    const header = r.headers.get("Content-Disposition") || "";
+    const named = /filename\*=UTF-8''([^;]+)/.exec(header);
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(await r.blob());
+    link.download = named ? decodeURIComponent(named[1]) : "exhibit." + format;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(link.href), 60000);
+    toast("Exported the " + railName(it) + " as " + (format === "pdf" ? "a PDF." : "an HTML file."));
+  } catch (err) { toast("Couldn’t export it: " + ((err && err.message) || err)); }
+};
+const tellRail = () => tellFrame({ channel: "exhibit-rail-state", editing: dataOpen ? dataKey : null });
+window.addEventListener("message", (event) => {
+  if (event.source !== frame.contentWindow) return;
+  const m = event.data;
+  if (!m || m.channel !== "exhibit-item-action" || !m.item || typeof m.item.id !== "string") return;
+  const it = { id: m.item.id, kind: m.item.kind, key: String(m.item.key || ""), name: String(m.item.name || "") };
+  if (m.action === "copy") {
+    const what = { callout: "callout", panel: "panel", code: "code block" }[it.kind] || "text";
+    if (typeof m.text === "string" && m.text) copyText(m.text.slice(0, 200000), "Copied the " + what + ".");
+  }
+  else if (m.action === "edit") { toggleChartData(it.key); tellRail(); }
+  else if (m.action === "ref") copyText(
+    referenceFor(config.current, savedTitle) + " " + (it.kind === "chart" ? "chart" : "diagram") + " \"" + it.name + "\"",
+    "Reference to the " + railName(it) + " copied. Paste it into a WorkSwarm chat.");
+  else if (m.action === "export") {
+    const f = frame.getBoundingClientRect(), r = m.rect || {};
+    railAnchor.style.left = (f.left + (Number(r.left) || 0)) + "px";
+    railAnchor.style.top = (f.top + (Number(r.top) || 0)) + "px";
+    railAnchor.style.width = (Number(r.width) || 1) + "px";
+    railAnchor.style.height = (Number(r.height) || 1) + "px";
+    openMenu(railAnchor, [
+      { label: "PNG image (.png)", run: () => exportPng(it) },
+      { label: "PDF (.pdf)", run: () => exportItem(it, "pdf", "PDF") },
+      { label: "HTML file (.html)", run: () => exportItem(it, "html", "HTML file") },
+    ]);
+  }
+});
+new MutationObserver(tellRail).observe(dataPanel, { attributes: true, attributeFilter: ["hidden"] });
+frame.addEventListener("load", tellRail);
+"""
+
+
+# The page panel (Slides and Document views of a freeform exhibit): a thumbnail of every slide or page,
+# from the picture the page makes (_THUMBS_SCRIPT), numbered placeholders until it arrives. Clicking one
+# goes to it; the one shown is marked and kept in view. Made again after chart data is edited.
+_THUMBS_VIEWER_SCRIPT = r"""
+const thumbsPanel = document.getElementById("thumbs"), thumbsList = document.getElementById("thumbs-list");
+let thumbSprite = null, thumbCount = 0, thumbTimer = 0;
+const THUMB_W = 150;
+const askThumbs = (delay) => { clearTimeout(thumbTimer); thumbTimer = setTimeout(() => tellFrame({ channel: "exhibit-thumbs-request" }), delay || 0); };
+const paintThumbs = () => {
+  if (thumbsPanel.hidden) return;
+  if (thumbsList.children.length !== pageTotal) {
+    thumbsList.replaceChildren();
+    for (let i = 0; i < pageTotal; i++) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "pp-item";
+      b.setAttribute("aria-label", (currentView === "slides" ? "Slide " : "Page ") + (i + 1));
+      b.innerHTML = '<span class="pp-img"></span><span class="pp-n">' + (i + 1) + "</span>";
+      b.addEventListener("click", () => pageTell({ op: "goto", page: i }));
+      thumbsList.appendChild(b);
+    }
+  }
+  const ratio = currentView === "slides" ? 9 / 16 : 11 / 8.5;
+  [...thumbsList.children].forEach((b, i) => {
+    const img = b.firstChild;
+    img.style.height = Math.round(THUMB_W * ratio) + "px";
+    if (thumbSprite && thumbSprite.urls && thumbSprite.urls[i]) {  // slides: a picture each
+      img.style.backgroundImage = "url(" + thumbSprite.urls[i] + ")";
+      img.style.backgroundSize = "100% 100%";
+      img.classList.add("ready");
+    } else if (thumbSprite && thumbSprite.url && i < thumbSprite.pages) {  // pages: slices of one picture
+      const scale = THUMB_W / thumbSprite.width;
+      img.style.backgroundImage = "url(" + thumbSprite.url + ")";
+      img.style.backgroundSize = THUMB_W + "px auto";
+      img.style.backgroundPosition = "0 " + (-i * thumbSprite.step * scale) + "px";
+      img.classList.add("ready");
+    }
+    b.classList.toggle("on", i === pageNow);
+    b.setAttribute("aria-current", i === pageNow ? "page" : "false");
+  });
+};
+window.addEventListener("message", (event) => {
+  if (event.source !== frame.contentWindow || !event.data) return;
+  const m = event.data;
+  const picture = (u) => typeof u === "string" && u.startsWith("data:image/");
+  if (m.channel === "exhibit-thumbs" && Array.isArray(m.urls) && m.urls.every(picture)) {
+    thumbSprite = { urls: m.urls };
+    paintThumbs();
+  } else if (m.channel === "exhibit-thumbs" && picture(m.url)) {
+    thumbSprite = { url: m.url, pages: m.pages, width: m.width, step: m.step };
+    paintThumbs();
+  }
+  if (m.channel === "exhibit-pages") {
+    const grew = Number.isInteger(m.total) && m.total !== thumbCount;
+    thumbCount = m.total;
+    paintThumbs();
+    const on = thumbsList.children[pageNow];
+    if (on) on.scrollIntoView({ block: "nearest" });
+    if (grew && thumbSprite) askThumbs(400);  // the pages changed: picture them again
+  }
+  if (m.channel === "exhibit-chart-saved") askThumbs(800);
+});
+window.addEventListener("exhibit-view", (e) => {
+  thumbsPanel.hidden = e.detail === "page";
+  thumbSprite = null; thumbCount = 0;
+  thumbsList.replaceChildren();
+});
+window.addEventListener("exhibit-shown", () => { if (currentView !== "page") askThumbs(0); });
 """
 
 
@@ -5191,8 +5492,8 @@ window.addEventListener("message", (event) => {
   showPage();
 });
 frame.addEventListener("load", () => pageTell({ op: "hello" }));
-if (pagerKind === "slides") document.addEventListener("keydown", (e) => {
-  if (pager.hidden || e.altKey || e.ctrlKey || e.metaKey) return;
+document.addEventListener("keydown", (e) => {
+  if (pagerKind !== "slides" || pager.hidden || e.altKey || e.ctrlKey || e.metaKey) return;
   if (e.target.closest("input, textarea, select, [contenteditable], [role=menu], .pop-menu")) return;
   const keys = ["ArrowRight", "ArrowDown", "PageDown", "ArrowLeft", "ArrowUp", "PageUp", "Home", "End"];
   if (!keys.includes(e.key)) return;
@@ -5412,11 +5713,19 @@ def _page_kind(page: str) -> str:
     return found.group(1).lower() if found else ""
 
 
+# Default font (0.4.1): pages that set no font got the browser's default serif (Times New Roman); on
+# 2026-11-13, 3 of 9 DeepSeek Pro pages had none. Every page gets the system sans and monospace, with
+# zero specificity (:where) at the top of <head>, so any font the page sets still wins.
+_BASE_FONT_STYLE = ('<style data-exhibit-kit="font">:where(html){font-family:system-ui,-apple-system,"Segoe UI",'
+                    'Roboto,"Helvetica Neue",Arial,sans-serif}:where(code,kbd,samp,pre){font-family:ui-monospace,'
+                    'SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}</style>')
+
+
 def _preset_scripts(page: str, thumbnail: bool) -> str:
     """What the plugin adds to a page: slide navigation or document pages for a preset, and the
     chart kit when the page calls exhibit.chart(. Goes after the bridge, which defines window.exhibit."""
     kind = _page_kind(page)
-    scripts = _CHART_KIT_SCRIPT if _uses_chart_kit(page) or kind == "charts" else ""
+    scripts = _BASE_FONT_STYLE + (_CHART_KIT_SCRIPT if _uses_chart_kit(page) or kind == "charts" else "")
     if _uses_page_parts(page):
         scripts += _PARTS_STYLE
     if _uses_diagram_kit(page):
@@ -5574,6 +5883,16 @@ _SNAPSHOT_SCRIPT = _LIB_LOADER_SCRIPT + """<script>(() => {
     const m = event.data;
     if (!m || m.channel !== "exhibit-snapshot") return;
     const answer = (extra) => parent.postMessage({ channel: "exhibit-snapshot", reqId: m.reqId, ...extra }, "*");
+    // One chart or diagram (the viewer's item rail), or the whole page.
+    if (m.item) {
+      const found = (window.__exhibitItems ? window.__exhibitItems() : []).find((it) => it.id === m.item);
+      if (!found) return answer({ error: "that chart or diagram isn't on the page any more" });
+      const el = found.el;
+      const skip = (node) => !(node.classList && (node.classList.contains("exhibit-diagram-tools") || node.classList.contains("exhibit-diagram-detail")));
+      return load().then((lib) => lib.toPng(el, { pixelRatio: 2, backgroundColor: background(), skipFonts: true, filter: skip,
+        style: { outline: "none", margin: "0" } }))
+        .then((url) => answer({ url }), (err) => answer({ error: String((err && err.message) || err) }));
+    }
     const root = document.documentElement;
     load().then((lib) => lib.toPng(root, {
       pixelRatio: 2, backgroundColor: background(), skipFonts: true,
@@ -5583,11 +5902,638 @@ _SNAPSHOT_SCRIPT = _LIB_LOADER_SCRIPT + """<script>(() => {
 })();</script>"""
 
 
+# Item rail (0.4.1, freeform pages): Export, Edit data and Reference beside each kit chart and diagram,
+# right of the content column. Drawn here in the page, in a closed shadow root: the page's CSS and
+# scripts don't reach it, and it scrolls with the page without lagging (a column drawn by the viewer
+# from reported positions always trailed the page by a frame or two). The viewer does the actions.
+# window.__exhibitItems() is also how an item export (PNG here, PDF and HTML on the server) finds it.
+_ITEMS_SCRIPT = """<script>(() => {
+  const heading = (el) => {
+    let found = null;
+    for (const h of document.querySelectorAll("h1,h2,h3,h4")) {
+      if (h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) found = h; else break;
+    }
+    return found ? found.textContent.replace(/\\s+/g, " ").trim().slice(0, 80) : "";
+  };
+  const human = (id) => { const s = String(id || "").replace(/[-_]+/g, " ").trim(); return s ? s[0].toUpperCase() + s.slice(1) : ""; };
+  window.__exhibitItems = () => {
+    const list = [];
+    const info = window.__exhibitChartInfo;
+    if (info) for (const [el, c] of info) {
+      if (!el.isConnected) continue;
+      list.push({ el, kind: "chart", id: "chart:" + c.ref, key: c.key, title: c.title || "",
+        fallback: /^chart-\\d+$/.test(c.ref) ? "" : human(c.ref) });
+    }
+    document.querySelectorAll("pre.exhibit-diagram").forEach((pre, i) => {
+      const wrap = pre.nextElementSibling;
+      if (!wrap || !wrap.classList.contains("exhibit-diagram-wrap")) return;
+      list.push({ el: wrap, kind: "diagram", id: "diagram:" + (pre.id || i + 1),
+        title: pre.dataset.name || pre.getAttribute("title") || "", fallback: human(pre.id) });
+    });
+    list.sort((a, b) => (a.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+    let charts = 0, diagrams = 0;
+    for (const it of list) {
+      const n = it.kind === "chart" ? ++charts : ++diagrams;
+      it.name = it.title || heading(it.el) || it.fallback || (it.kind === "chart" ? "Chart " : "Diagram ") + n;
+    }
+    return list;
+  };
+  if (parent === window || window.__exhibitCalm) return;
+  let last = "", queued = false;
+  // Text items (0.4.1): callouts, panels and code blocks get a Copy button. Their text is copied plain,
+  // with list items as "- " or "1. " lines, so it pastes cleanly into a chat or a note.
+  const TEXT_KINDS = { callout: "callout", panel: "panel", code: "code block" };
+  const clean = (t) => String(t || "").replace(/[ \\t]+/g, " ").replace(/\\s*\\n\\s*/g, " ").trim();
+  const plain = (el) => {
+    if (el.tagName === "PRE") return el.textContent.replace(/\\n+$/, "");
+    const loose = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+    if (loose || !el.children.length) return clean(el.innerText);
+    const out = [];
+    const walk = (node) => { for (const ch of node.children) {
+      if (ch.tagName === "UL" || ch.tagName === "OL")
+        [...ch.children].forEach((li, i) => out.push((ch.tagName === "OL" ? (i + 1) + ". " : "- ") + clean(li.innerText)));
+      else if ((ch.tagName === "DIV" || ch.tagName === "SECTION") && ch.children.length) walk(ch);
+      else { const t = clean(/^H[1-6]$/.test(ch.tagName) ? ch.textContent : ch.innerText); if (t) out.push(t); }  // headings as written, not as styled (uppercase)
+    } };
+    walk(el);
+    return out.join("\\n");
+  };
+  const textItems = () => {
+    const list = [], counts = {};
+    document.querySelectorAll(".ex-callout, .ex-panel, pre").forEach((el) => {
+      if (el.closest("[data-exhibit-kit], [data-exhibit-rail], .exhibit-diagram-wrap") || el.matches("pre.exhibit-diagram")) return;
+      if (list.some((o) => o.el.contains(el))) return;
+      const kind = el.tagName === "PRE" ? "code" : el.classList.contains("ex-panel") ? "panel" : "callout";
+      counts[kind] = (counts[kind] || 0) + 1;
+      const h = el.querySelector("h1,h2,h3,h4,h5,h6");
+      const name = kind === "code" ? "" : clean(h ? h.textContent : el.innerText).slice(0, 40);
+      list.push({ el, kind, text: true, id: kind + ":" + counts[kind], name });
+    });
+    return list;
+  };
+  // The right edge of the page's content column: for each item, its outermost container that's
+  // narrower than the window (a centred body or wrapper), else the item itself. The rail sits just
+  // right of it.
+  const contentRight = (list) => {
+    const width = document.documentElement.clientWidth;
+    let right = 0;
+    for (const it of list) {
+      let edge = it.el.getBoundingClientRect().right;
+      for (let up = it.el.parentElement; up && up !== document.documentElement; up = up.parentElement) {
+        const r = up.getBoundingClientRect();
+        if (r.width > 0 && r.width < width - 1) edge = r.right;
+      }
+      right = Math.max(right, edge);
+    }
+    return Math.round(right);
+  };
+  // The rail is drawn here, in the page, so it scrolls with it natively, but inside a closed shadow root,
+  // so nothing the page styles or queries reaches it. Each item gets a column from its top to its bottom,
+  // right of the content column; the group of buttons in it is sticky, so it stays in view while its item
+  // is partly scrolled away, and leaves with the item's bottom. The viewer does what the buttons ask for.
+  const ICONS = __ICONS__;
+  const host = document.createElement("div");
+  host.setAttribute("data-exhibit-rail", "");
+  host.style.cssText = "position:absolute;top:0;left:0;width:0;height:0;margin:0;padding:0;border:0;z-index:2147483646;pointer-events:none;";
+  const shadow = host.attachShadow({ mode: "closed" });
+  shadow.innerHTML = "<style>"
+    + ":host{all:initial}@media print{:host{display:none!important}}"
+    + ".col{position:absolute;width:42px;pointer-events:none}"
+    // The line at its left is an inset shadow, not a border, so the buttons sit centred in the shape.
+    + ".grp{position:sticky;top:6px;box-sizing:border-box;width:38px;padding:2px 3px;display:flex;flex-direction:column;"
+    + "align-items:center;gap:2px;box-shadow:inset 2px 0 0 var(--line);background:var(--bg);border-radius:0 8px 8px 0;"
+    + "pointer-events:auto;transition:box-shadow .15s}"
+    + ".grp.on{box-shadow:inset 2px 0 0 #ff8821}"
+    + "button{all:unset;box-sizing:border-box;width:32px;height:32px;display:flex;align-items:center;justify-content:center;"
+    + "border-radius:8px;color:var(--ink2);cursor:pointer}"
+    + "button:hover,button[aria-pressed=true],button[aria-expanded=true]{background:var(--hover);color:var(--ink)}"
+    + "button:focus-visible{outline:2px solid #ff8821;outline-offset:-2px}"
+    + "button[hidden]{display:none}svg{width:17px;height:17px}"
+    + "</style>";
+  const layer = document.createElement("div");
+  shadow.appendChild(layer);
+  const cols = new Map();
+  let editing = null, hinted = null;
+  const outline = (it) => {
+    if (hinted) { hinted.el.style.outline = hinted.outline; hinted.el.style.outlineOffset = hinted.offset; hinted = null; }
+    if (!it) return;
+    hinted = { el: it.el, outline: it.el.style.outline, offset: it.el.style.outlineOffset };
+    it.el.style.outline = "2px solid #ff8821";
+    // Inside a slide or a document page the box clips at its edges: draw the outline just inside.
+    it.el.style.outlineOffset = it.el.closest(".exhibit-slide-body, .exhibit-mold-sheet") ? "-2px" : "4px";
+  };
+  const ask = (action, it, button) => {
+    const r = button.getBoundingClientRect();
+    parent.postMessage({ channel: "exhibit-item-action", action, rect: { left: r.left, top: r.top, width: r.width, height: r.height },
+      item: { id: it.id, kind: it.kind, key: it.key || "", name: it.name }, text: action === "copy" ? plain(it.el) : undefined }, "*");
+  };
+  const button = (icon, label, run) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.innerHTML = icon; b.title = label; b.setAttribute("aria-label", label);
+    b.addEventListener("click", (e) => { e.stopPropagation(); run(b); });
+    return b;
+  };
+  const column = (id) => {
+    const c = { col: document.createElement("div"), grp: document.createElement("div"), it: null };
+    c.col.className = "col"; c.grp.className = "grp";
+    c.exp = button(ICONS.export, "Export", (b) => ask("export", c.it, b));
+    c.edit = button(ICONS.edit, "Edit data", (b) => ask("edit", c.it, b));
+    c.ref = button(ICONS.ref, "Copy reference", (b) => ask("ref", c.it, b));
+    c.copy = button(ICONS.copy, "Copy", (b) => ask("copy", c.it, b));
+    c.grp.append(c.exp, c.edit, c.ref, c.copy);
+    const on = (yes) => { c.grp.classList.toggle("on", yes); outline(yes ? c.it : null); };
+    c.grp.addEventListener("pointerenter", () => on(true));
+    c.grp.addEventListener("pointerleave", () => on(false));
+    c.grp.addEventListener("focusin", () => on(true));
+    c.grp.addEventListener("focusout", () => on(false));
+    c.col.appendChild(c.grp);
+    layer.appendChild(c.col);
+    return c;
+  };
+  // Colours from the page's own background: light or dark ink to match it.
+  const paint = () => {
+    let bg = "";
+    for (const el of [document.body, document.documentElement]) {
+      const c = el && getComputedStyle(el).backgroundColor;
+      if (c && c !== "transparent" && !/rgba\\([^)]*,\\s*0\\)$/.test(c)) { bg = c; break; }
+    }
+    const rgb = /^rgba?\\(\\s*(\\d+)[,\\s]+(\\d+)[,\\s]+(\\d+)/.exec(bg || "rgb(255,255,255)");
+    const dark = (0.2126 * rgb[1] + 0.7152 * rgb[2] + 0.0722 * rgb[3]) / 255 < 0.55;
+    const doc = document.querySelector(".exhibit-mold-sheet") ? getComputedStyle(document.documentElement).getPropertyValue("--exhibit-sheet-bg").trim() : "";
+    layer.style.cssText = "--bg:" + (doc || bg || "#fff") + ";" + (dark
+      ? "--ink:#ececec;--ink2:#b4b4b8;--hover:rgba(255,255,255,.1);--line:rgba(255,255,255,.22)"
+      : "--ink:#191919;--ink2:#595959;--hover:rgba(0,0,0,.06);--line:rgba(0,0,0,.16)");
+  };
+  const layout = () => {
+    queued = false;
+    if (!host.isConnected) document.documentElement.appendChild(host);
+    paint();
+    const list = window.__exhibitItems().concat(textItems());
+    const right = contentRight(list), width = document.documentElement.clientWidth;
+    const left = Math.max(0, Math.min(right + 12, width - 44)) + scrollX;
+    const seen = new Set();
+    let floor = -Infinity;  // groups of items side by side stack, with a gap, never on top of each other
+    const shown = list.map((it) => ({ it, r: it.el.getBoundingClientRect() }))
+      .filter(({ it, r }) => r.height > 0 && r.right > 0 && getComputedStyle(it.el).visibility !== "hidden")
+      .sort((a, b) => a.r.top - b.r.top);
+    for (const { it, r } of shown) {
+      seen.add(it.id);
+      const c = cols.get(it.id) || cols.set(it.id, column(it.id)).get(it.id);
+      c.it = it;
+      c.exp.hidden = c.ref.hidden = !!it.text;
+      c.copy.hidden = !it.text;
+      if (it.text) {
+        c.edit.hidden = true;
+        c.copy.title = "Copy the " + TEXT_KINDS[it.kind] + (it.name ? " “" + it.name + "”" : "");
+      } else {
+      const info = window.__exhibitChartInfo && it.kind === "chart" ? window.__exhibitChartInfo.get(it.el) : null;
+      c.edit.hidden = !(info && info.editable);
+      c.edit.setAttribute("aria-pressed", String(!!editing && editing === it.key));
+      const kind = it.kind === "chart" ? "chart" : "diagram";
+      c.exp.title = "Export the " + kind + " “" + it.name + "”";
+      c.edit.title = "Edit the data of the " + kind + " “" + it.name + "”";
+      c.ref.title = "Copy a reference to the " + kind + " “" + it.name + "”";
+      }
+      const h = c.grp.offsetHeight || 100;
+      const top = Math.max(floor, r.top + scrollY), bottom = r.bottom + scrollY;
+      c.col.style.left = left + "px";
+      c.col.style.top = top + "px";
+      c.col.style.height = Math.max(h, bottom - top) + "px";
+      floor = top + h + 20;
+    }
+    for (const [id, c] of cols) if (!seen.has(id)) { c.col.remove(); cols.delete(id); }
+  };
+  const soon = () => { if (!queued) { queued = true; requestAnimationFrame(layout); } };
+  // The document scrolls the rail with it; a page that scrolls an inner box instead gets laid out again.
+  addEventListener("scroll", (e) => { if (e.target !== document && e.target !== document.documentElement) soon(); }, { capture: true, passive: true });
+  addEventListener("resize", soon);
+  addEventListener("load", soon);
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", soon); else soon();
+  try { new ResizeObserver(soon).observe(document.documentElement); } catch (e) {}
+  setInterval(soon, 600);  // charts and diagrams appear and change size after load
+  addEventListener("message", (event) => {
+    if (event.source !== parent) return;
+    const m = event.data;
+    if (!m) return;
+    if (m.channel === "exhibit-rail-state") { editing = typeof m.editing === "string" ? m.editing : null; soon(); }
+  });
+  // In the Slides view the slide changes without a resize: lay out again when a slide is shown.
+  try { new MutationObserver(soon).observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ["class"] }); } catch (e) {}
+})();</script>"""
+_COPY_ICON = (
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true"><rect x="8.5" y="8.5" width="11.5" height="11.5" rx="2"/>'
+    '<path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></svg>'
+)
+_ITEMS_SCRIPT = _ITEMS_SCRIPT.replace("__ICONS__", json.dumps(
+    {"export": _EXPORT_ICON, "edit": _PENCIL_ICON, "ref": _LINK_ICON, "copy": _COPY_ICON}))
+
+
+# Item export (PDF and HTML of one chart or diagram): the whole page, with everything but that item
+# hidden once the page has drawn it, so the item keeps working as it does on the page (its data, its
+# onChange, its steps). Its containers become plain blocks, so it takes the page's full width.
+_ITEM_ONLY_SCRIPT = """<script>(() => {
+  const wanted = __ITEM__;
+  const started = Date.now();
+  const isolate = () => {
+    const it = (window.__exhibitItems ? window.__exhibitItems() : []).find((x) => x.id === wanted);
+    // A diagram is isolated once drawn: Mermaid measures its text in a box it adds to the page, which
+    // the rule below would hide.
+    const waiting = !it || (it.kind === "diagram" && !it.el.dataset.state);
+    if (waiting) { if (Date.now() - started < 8000) setTimeout(isolate, 50); return; }
+    // Marked, then hidden by a style rule, so parts the page or a kit adds later stay hidden too.
+    const before = it.el.getBoundingClientRect().height;
+    it.el.setAttribute("data-exhibit-item", "");
+    for (let up = it.el.parentElement; up && up !== document.documentElement; up = up.parentElement) up.setAttribute("data-exhibit-path", "");
+    const style = document.createElement("style");
+    style.textContent = "[data-exhibit-path]>:not([data-exhibit-path]):not([data-exhibit-item]){display:none!important}"
+      + "[data-exhibit-path]:not(body){display:block!important}";
+    document.head.appendChild(style);
+    // An item sized by its neighbours (a chart stretched to its row in a grid) keeps its size alone.
+    if (before >= 40 && it.el.getBoundingClientRect().height < 40) it.el.style.minHeight = before + "px";
+    document.documentElement.classList.add("exhibit-item-only");
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", isolate); else isolate();
+})();</script>"""
+
+
+# Molds (0.4.1 prototype): a freeform page printed as a slide deck or a document PDF, without changing
+# the exhibit. Every rule is borrowed, not invented:
+# - Blocks: a page is cut into blocks, each the largest element with no heading inside (so grids,
+#   cards, widgets, charts and diagrams stay whole), like Pandoc reading HTML into blocks.
+# - Slides: Pandoc's slide level ("the highest heading level that is followed immediately by content");
+#   headings above it make section-title slides, headings at it start a slide, lower ones stay inside;
+#   <hr> starts a slide. The page's first <h1> and what follows it is the title slide (Pandoc's title
+#   block). reveal.js's fixed slide size (960 x 540, 16:9) scaled up to the 13.333 x 7.5 in page;
+#   paddings, title sizes and the accent bar from our slides preset; and its fit rule: shrink a crowded
+#   slide down to 60%. What still doesn't fit continues on a "(continued)" slide, broken only between
+#   blocks and never right after a heading (CSS fragmentation: break-inside: avoid, break-after: avoid,
+#   as Paged.js does for pages).
+# - Documents: our document preset's own paginator (_DOCUMENT_SCRIPT: US Letter pages, the same on
+#   screen and in the PDF, headings kept with what follows), on the page's blocks kept whole as with
+#   CSS break-inside: avoid.
+_MOLD_SLIDES_STYLE = """<style data-exhibit-kit="mold">
+@page { size: 13.333in 7.5in; margin: 0; }
+html.exhibit-molded, html.exhibit-molded body { margin:0 !important; padding:0 !important; max-width:none !important; width:auto !important; height:auto !important; overflow:visible !important; background:var(--exhibit-slide-bg, #fff) !important; }
+html.exhibit-molded body > :not(.exhibit-deck) { display:none !important; }
+.exhibit-deck { counter-reset: exhibit-slide; }
+/* --exhibit-scale: 1 while the slides are laid out; then the window's fit on screen, and 13.333 in / 960 px
+   on paper. */
+.exhibit-page { width:calc(960px * var(--exhibit-scale, 1)); height:calc(540px * var(--exhibit-scale, 1)); overflow:hidden; break-after:page; position:relative; }
+.exhibit-page:last-child { break-after:auto; }
+@media print { :root { --exhibit-scale: 1.33333 !important; } .exhibit-page { display:block !important; box-shadow:none !important; } }
+/* The Slides view: one slide at a time, centred and fitted to the window (the viewer's slide control
+   moves between them, as for a slide deck). */
+html.exhibit-slides-view .exhibit-deck { position:fixed; inset:0; display:grid; place-items:center; background:#e9e8e4; }
+html.exhibit-slides-view .exhibit-page { position:fixed; left:-100000px; top:0; box-shadow:0 1px 3px rgba(0,0,0,.12),0 8px 24px rgba(0,0,0,.08); }
+html.exhibit-slides-view .exhibit-page.active { position:relative; left:auto; }
+@media (prefers-color-scheme: dark) { html.exhibit-slides-view .exhibit-deck { background:#1b1b1a; } }
+.exhibit-slide { width:960px; height:540px; box-sizing:border-box; padding:58px 67px 62px; display:flex; flex-direction:column;
+  overflow:hidden; position:relative; counter-increment:exhibit-slide; background:var(--exhibit-slide-bg, #fff); transform-origin:0 0; }
+.exhibit-deck.scaled .exhibit-slide { transform:scale(var(--exhibit-scale, 1)); }
+.exhibit-slide > .exhibit-slide-title { margin:0 0 25px !important; padding:0 !important; border:0 !important; font-size:34px !important; line-height:1.12 !important; font-weight:700 !important; letter-spacing:-.015em; text-wrap:balance; }
+.exhibit-slide-body { flex:1; min-height:0; overflow:hidden; }
+.exhibit-slide-body > :first-child { margin-top:0 !important; }
+.exhibit-slide:not(.title)::after { content:attr(data-n); position:absolute; right:29px; bottom:23px; font-size:12.5px; color:#8a8a85; font-variant-numeric:tabular-nums; }
+.exhibit-slide.title, .exhibit-slide.section { justify-content:center; padding-left:86px; }
+.exhibit-slide.title::before, .exhibit-slide.section::before { content:""; position:absolute; left:58px; top:30%; bottom:30%; width:6px; border-radius:99px; background:var(--exhibit-slide-accent, #ff8821); }
+.exhibit-slide.title > .exhibit-slide-title { font-size:52px !important; font-weight:750 !important; }
+.exhibit-slide.section > .exhibit-slide-title { font-size:44px !important; }
+.exhibit-slide.title .exhibit-slide-body, .exhibit-slide.section .exhibit-slide-body { flex:0 1 auto; color:var(--exhibit-slide-muted, #6b6b66); }
+.exhibit-slide.title .exhibit-slide-body > p { font-size:23px !important; line-height:1.35 !important; margin:18px 0 0 !important; max-width:80%; }
+</style>"""
+
+# Blocks, shared by both molds: the page in order, each block the largest element with no heading
+# inside. A container whose children sit side by side (a grid of cards, two columns) is one block
+# even with headings inside, as Pandoc keeps a <div>'s headings inside it.
+_MOLD_BLOCKS_SCRIPT = r"""<script>(() => {
+  const isHeading = (el) => /^H[1-6]$/.test(el.tagName);
+  const skip = (el) => /^(SCRIPT|STYLE|LINK|META|TEMPLATE|NOSCRIPT|NAV)$/.test(el.tagName) || el.hidden
+    || getComputedStyle(el).display === "none" || ["fixed", "sticky"].includes(getComputedStyle(el).position);
+  const sideBySide = (el) => {
+    const kids = [...el.children].filter((k) => !skip(k));
+    for (let i = 1; i < kids.length; i++) {
+      const a = kids[i - 1].getBoundingClientRect(), b = kids[i].getBoundingClientRect();
+      if (a.height && b.height && b.top < a.bottom - 2 && Math.abs(b.left - a.left) > 2) return true;
+    }
+    return false;
+  };
+  window.__exhibitMoldBlocks = () => {
+    const blocks = [];
+    const walk = (parent) => {
+      for (const el of [...parent.children]) {
+        if (skip(el)) continue;
+        if (isHeading(el) || el.tagName === "HR") blocks.push(el);
+        else if (el.querySelector("h1,h2,h3,h4,h5,h6") && !sideBySide(el) && !/(^|\s)ex-/.test(el.className)) walk(el);
+        else blocks.push(el);
+      }
+    };
+    walk(document.body);
+    return blocks;
+  };
+})();</script>"""
+
+_MOLD_SLIDES_SCRIPT = r"""<script>(() => {
+  const MIN_FIT = 0.6;  // our slides preset's smallest text
+  const isHeading = (el) => /^H[1-6]$/.test(el.tagName);
+  const level = (h) => Number(h.tagName[1]);
+  const ready = () => new Promise((resolve) => {
+    const started = Date.now();
+    const check = () => {
+      const pending = [...document.querySelectorAll(".exhibit-diagram-wrap")].some((w) => !w.dataset.state);
+      if (pending && Date.now() - started < 6000) return setTimeout(check, 50);
+      Promise.resolve(document.fonts && document.fonts.ready).then(() => setTimeout(resolve, 200));
+    };
+    check();
+  });
+  const make = (tag, cls) => { const el = document.createElement(tag); if (cls) el.className = cls; return el; };
+  const mold = () => {
+    // Colours of the page, for the slides' background, accent and muted text.
+    const cs = getComputedStyle(document.body), root = getComputedStyle(document.documentElement);
+    const bg = [cs.backgroundColor, root.backgroundColor].find((c) => c && !/rgba\([^)]*,\s*0\)$/.test(c) && c !== "transparent") || "#fff";
+    document.documentElement.style.setProperty("--exhibit-slide-bg", bg);
+    const accent = root.getPropertyValue("--accent").trim();
+    if (accent) document.documentElement.style.setProperty("--exhibit-slide-accent", accent);
+    const muted = root.getPropertyValue("--muted").trim();
+    if (muted) document.documentElement.style.setProperty("--exhibit-slide-muted", muted);
+    const blocks = window.__exhibitMoldBlocks();
+    if (!blocks.length) return;
+    // Each block keeps (at most) the width it had on the page, so nothing reflows into a shape the page
+    // wasn't made for (a drawing sized from its box outgrowing a fixed-height frame).
+    for (const b of blocks) {
+      const w = b.getBoundingClientRect().width;
+      if (w > 0 && !/^H[1-6]$/.test(b.tagName)) b.style.setProperty("max-width", Math.ceil(w) + "px");
+    }
+    // Pandoc's title block: the page's first <h1> when it comes first, and a paragraph right after it as
+    // the subtitle. Anything else before the first slide heading goes on a slide of its own.
+    let start = 0, titleHeading = null, subtitle = null;
+    if (isHeading(blocks[0]) && level(blocks[0]) === 1) {
+      titleHeading = blocks[0]; start = 1;
+      if (blocks[1] && blocks[1].tagName === "P") { subtitle = blocks[1]; start = 2; }
+    }
+    const rest = blocks.slice(start);
+    // Pandoc's slide level.
+    let slideLevel = 7;
+    rest.forEach((b, i) => { if (isHeading(b) && rest[i + 1] && !isHeading(rest[i + 1]) && rest[i + 1].tagName !== "HR") slideLevel = Math.min(slideLevel, level(b)); });
+    const deck = make("div", "exhibit-deck");
+    const slides = [];
+    const newSlide = (kind, heading) => {
+      const page = make("div", "exhibit-page"), slide = make("section", "exhibit-slide " + kind), body = make("div", "exhibit-slide-body");
+      if (heading) { heading.classList.add("exhibit-slide-title"); slide.append(heading); }
+      slide.append(body); page.append(slide); deck.append(page);
+      const s = { page, slide, body, kind, title: heading ? heading.textContent.trim() : "" };
+      slides.push(s);
+      return s;
+    };
+    let current = newSlide(titleHeading ? "title" : "plain", titleHeading);
+    if (subtitle) current.body.append(subtitle);
+    if (titleHeading) current = newSlide("plain", null);
+    for (const b of rest) {
+      if (b.tagName === "HR") { current = newSlide("plain", null); continue; }
+      if (isHeading(b) && level(b) < slideLevel) { newSlide("section", b); current = newSlide("plain", null); continue; }
+      if (isHeading(b) && level(b) === slideLevel) { current = newSlide("plain", b); continue; }
+      current.body.append(b);
+    }
+    document.body.append(deck);
+    document.documentElement.classList.add("exhibit-molded");
+    // Drop empty slides (a section title already shown, a trailing <hr>).
+    for (const s of [...slides]) {
+      if (!s.body.children.length && s.kind === "plain" && !s.slide.querySelector(".exhibit-slide-title")) { s.page.remove(); slides.splice(slides.indexOf(s), 1); }
+    }
+    // Fit: shrink to fit down to MIN_FIT; past that, continue on another slide, breaking between
+    // blocks and never right after a heading. A single block too tall even alone is scaled to fit.
+    const fit = (s) => {
+      const body = s.body;
+      body.style.zoom = "";
+      const room = body.clientHeight, need = body.scrollHeight;
+      if (need <= room + 1) return;
+      if (need * MIN_FIT <= room) { body.style.zoom = String(Math.floor(room / need * 1000) / 1000); return; }
+      const kids = [...body.children];
+      const top = body.getBoundingClientRect().top;
+      let cut = kids.findIndex((k, i) => i > 0 && k.getBoundingClientRect().bottom - top > room / MIN_FIT);
+      if (cut === -1) cut = kids.length > 1 ? kids.length - 1 : 0;
+      while (cut > 1 && isHeading(kids[cut - 1])) cut--;
+      if (cut <= 0) {
+        // One block too tall even alone: like reveal.js's r-stretch, its biggest picture (svg, canvas,
+        // img, video) shrinks to the room left, keeping its shape; then the text shrinks if it must.
+        // A kit chart redraws at any size, so it gets a shorter box instead (its text stays readable).
+        const charts = window.__exhibitChartInfo ? [...window.__exhibitChartInfo.keys()].filter((el) => kids[0].contains(el)) : [];
+        const chart = charts.sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0];
+        const media = chart ? null : [kids[0], ...kids[0].querySelectorAll("svg, canvas, img, video")]
+          .filter((m) => m.matches("svg, canvas, img, video") && !m.closest("svg svg"))
+          .sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0];
+        if (chart) {
+          const h = chart.getBoundingClientRect().height - (need - room) - 2;
+          chart.style.setProperty("height", Math.max(220, h) + "px", "important");
+        } else if (media) {
+          const r = media.getBoundingClientRect(), h = r.height - (need - room) - 2;
+          if (h >= r.height * 0.3) {
+            media.style.setProperty("height", h + "px", "important");
+            media.style.setProperty("width", Math.round(r.width * h / r.height) + "px", "important");
+            media.style.setProperty("max-width", "100%", "important");
+          }
+        }
+        const left = body.scrollHeight;
+        if (left > room + 1) body.style.zoom = String(Math.max(0.25, Math.floor(room / left * 1000) / 1000));
+        return;
+      }
+      const heading = s.title ? make("h2") : null;
+      if (heading) heading.textContent = s.title.replace(/\s*\(continued\)$/, "") + " (continued)";
+      const next = newSlide(s.kind === "title" ? "plain" : s.kind, heading);
+      s.page.after(next.page);
+      kids.slice(cut).forEach((k) => next.body.append(k));
+      fit(s);
+      fit(next);
+    };
+    [...slides].forEach(fit);
+    // Pages and kits redraw for their new width (charts, a page's own SVG sized from its box), which can
+    // change heights: fit once more after that, then scale the slides up to the page.
+    dispatchEvent(new Event("resize"));
+    // Charts redraw for their new boxes now, not on the next frame: a printed PDF may not get one.
+    const redrawCharts = () => {
+      if (!window.echarts || !window.__exhibitChartInfo) return;
+      for (const el of window.__exhibitChartInfo.keys()) { try { const c = window.echarts.getInstanceByDom(el); if (c) c.resize(); } catch (e) {} }
+    };
+    redrawCharts();
+    return new Promise((resolve) => setTimeout(resolve, 250)).then(() => {
+      [...slides].forEach(fit);
+      redrawCharts();
+      // Numbered here, not with a CSS counter: counters skip the slides the Slides view hides.
+      deck.querySelectorAll(".exhibit-slide").forEach((s, n) => { s.dataset.n = n + 1; });
+      deck.classList.add("scaled");
+      if (window.__exhibitMoldView) {
+        // The Slides view: fit the slides to the window (leaving room at the sides for the viewer's item
+        // rail), show one at a time, and hand them to the deck navigation slide decks use (the viewer's
+        // slide control, keys, swipes, the remembered slide).
+        const fitWindow = () => document.documentElement.style.setProperty("--exhibit-scale",
+          String(Math.max(0.2, Math.min((innerWidth - 120) / 960, (innerHeight - 40) / 540))));
+        fitWindow();
+        addEventListener("resize", fitWindow);
+        document.documentElement.classList.add("exhibit-slides-view");
+        window.__exhibitSlideSelector = ".exhibit-page";
+        dispatchEvent(new Event("exhibit-slides-ready"));
+      }
+    });
+  };
+  const run = () => ready().then(mold).catch((err) => console.error("exhibit mold:", err));
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run); else run();
+})();</script>"""
+
+_MOLD_DOCUMENT_STYLE = r"""<style data-exhibit-kit="mold">
+h1, h2, h3, h4, h5, h6 { break-after: avoid; }
+p, li { orphans: 3; widows: 3; }
+figure, table, pre, blockquote, img, svg, canvas, .exhibit-diagram-wrap, .exhibit-mold-keep,
+.ex-callout, .ex-panel, .ex-stats, .ex-stat, .ex-quote, .ex-compare, .ex-terms > *, .ex-steps > li, .ex-score { break-inside: avoid; }
+.exhibit-page-card { background: var(--exhibit-sheet-bg, #fff) !important; }
+/* The paginator's page width includes its margins (the document preset sizes boxes that way); a freeform
+   page may not, so the sheet does it itself. Content can't run past the page's right margin. */
+.exhibit-mold-sheet { box-sizing: border-box !important; }
+/* The pages are centred in the window: the page's own body width and side margins don't apply. */
+html.exhibit-paged body { max-width: none !important; width: auto !important; margin-left: 0 !important; margin-right: 0 !important;
+  padding-left: 0 !important; padding-right: 0 !important; }
+.exhibit-mold-sheet * { max-width: 100%; box-sizing: border-box; }
+/* On paper, content that grows after the pages were laid out (a page's own print rules, a late redraw)
+   runs onto another page instead of being cut off at the last one. */
+@media print { html.exhibit-paged .exhibit-mold-sheet { height: auto !important; overflow: visible !important; } }
+</style>
+<script>(() => {
+  // Before the document preset's paginator starts (it lays out the page's .sheet at DOMContentLoaded),
+  // the freeform page's content goes into one .sheet, and its blocks (the same blocks the slides mold
+  // uses) are marked to stay whole, like the preset's callouts and figures. The paginator keeps headings
+  // with what follows (break-after: avoid) and lets a block taller than a page run on.
+  const wrap = () => {
+    if (document.querySelector(".exhibit-mold-sheet")) return;
+    const sheet = document.createElement("div");
+    sheet.className = "sheet exhibit-mold-sheet";
+    for (const node of [...document.body.childNodes]) {
+      if (node.nodeType === 1 && /^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT)$/.test(node.tagName)) continue;
+      sheet.append(node);
+    }
+    document.body.append(sheet);
+    const bg = [document.body, document.documentElement].map((el) => getComputedStyle(el).backgroundColor)
+      .find((c) => c && c !== "transparent" && !/rgba\([^)]*,\s*0\)$/.test(c));
+    if (bg) document.documentElement.style.setProperty("--exhibit-sheet-bg", bg);
+    const info = window.__exhibitChartInfo;
+    if (info) for (const el of info.keys()) el.classList.add("exhibit-mold-keep");
+    if (window.__exhibitMoldBlocks) for (const b of window.__exhibitMoldBlocks()) {
+      if (!/^H[1-6]$/.test(b.tagName)) b.classList.add("exhibit-mold-keep");
+    }
+  };
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wrap); else wrap();
+})();</script>"""
+
+_MOLDS = {"slides": _MOLD_BLOCKS_SCRIPT + _MOLD_SLIDES_STYLE + _MOLD_SLIDES_SCRIPT,
+          "document": _MOLD_BLOCKS_SCRIPT + _MOLD_DOCUMENT_STYLE + _DOCUMENT_SCRIPT}
+_VIEWS = ("page", "slides", "document")
+
+
+def _mold_scripts(mold: str, view: bool = False) -> str:
+    """What a page gets to be laid out as slides or document pages: for a PDF, or (view) for the
+    viewer's Slides and Document views, where the slides are shown one at a time with the deck controls."""
+    scripts = _MOLDS[mold]
+    if view and mold == "slides":
+        scripts = "<script>window.__exhibitMoldView = true</script>" + scripts + _slides_script(False)
+    if view:
+        scripts += _THUMBS_SCRIPT
+    return scripts
+
+
+# Thumbnails for the viewer's page panel (Slides and Document views), made with html-to-image (as PNG
+# export is) and sent to the viewer. Slides: each slide pictured on its own (the slides the view isn't
+# showing are laid out off-screen, so their charts are drawn at full size). Document: one picture of the
+# page strip, which the viewer shows a page at a time. Made when the viewer asks: once the view is
+# shown, and after edits.
+_THUMBS_SCRIPT = r"""<script>(() => {
+  if (parent === window) return;
+  const WIDTH = 240;  // px wide, each thumbnail
+  let busy = false, again = false;
+  const make = async () => {
+    if (busy) { again = true; return; }
+    busy = true;
+    try {
+      const lib = await window.__exhibitLoad("html-to-image", () => window.htmlToImage);
+      const skipRail = (n) => !(n.hasAttribute && n.hasAttribute("data-exhibit-rail"));
+      const deck = document.querySelector(".exhibit-deck.scaled");
+      if (deck) {
+        const urls = [];
+        for (const page of deck.querySelectorAll(".exhibit-page")) {
+          const ratio = WIDTH / page.offsetWidth;
+          urls.push(await lib.toPng(page, { pixelRatio: ratio, skipFonts: true, filter: skipRail,
+            style: { position: "static", left: "0", top: "0", boxShadow: "none" } }));
+        }
+        parent.postMessage({ channel: "exhibit-thumbs", urls }, "*");
+      } else {
+        // The page strip at its own size (the paginator scales it to the window with a transform).
+        const sheet = document.querySelector(".exhibit-page-stage > .sheet");
+        if (!sheet) return;
+        const ratio = WIDTH / 816;
+        const url = await lib.toPng(sheet, { pixelRatio: ratio, skipFonts: true, filter: skipRail,
+          width: 816, height: sheet.offsetHeight, style: { transform: "none", position: "static" } });
+        parent.postMessage({ channel: "exhibit-thumbs", url, width: WIDTH, step: 1056 * ratio,
+          pages: document.querySelectorAll(".exhibit-page-card").length }, "*");
+      }
+    } catch (err) {
+      console.warn("exhibit thumbnails:", err);
+    } finally {
+      busy = false;
+      if (again) { again = false; setTimeout(make, 300); }
+    }
+  };
+  addEventListener("message", (event) => {
+    if (event.source === parent && event.data && event.data.channel === "exhibit-thumbs-request") make();
+  });
+})();</script>"""
+
+
+def _item_only_script(item: str) -> str:
+    return _ITEM_ONLY_SCRIPT.replace("__ITEM__", json.dumps(item).replace("<", "\\u003c"))
+
+
+# A slim scrollbar on every exhibit (0.4.1): a thin rounded handle in a muted grey, no arrows, the track
+# blending into the page, light and dark. Standard properties only (Edge/Chrome draw them natively, so
+# scrolling works as before), with zero specificity so a page's own scrollbar styling still wins.
+# Edge and Chrome use the ::-webkit-scrollbar rules (they'd ignore them, and keep the arrow buttons, if
+# scrollbar-width were set too); other browsers get the standard thin scrollbar.
+_SCROLLBAR_CSS = (
+    "::-webkit-scrollbar{width:10px;height:10px;background:transparent}"
+    "::-webkit-scrollbar-button{display:none;width:0;height:0}"
+    "::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}"
+    "::-webkit-scrollbar-thumb{background:rgba(0,0,0,.2);border-radius:10px;border:2px solid transparent;background-clip:content-box}"
+    "::-webkit-scrollbar-thumb:hover,::-webkit-scrollbar-thumb:active{background-color:rgba(0,0,0,.32)}"
+    "@media (prefers-color-scheme: dark){::-webkit-scrollbar-thumb{background-color:rgba(255,255,255,.22)}"
+    "::-webkit-scrollbar-thumb:hover,::-webkit-scrollbar-thumb:active{background-color:rgba(255,255,255,.34)}}"
+    "@supports not selector(::-webkit-scrollbar){:where(html),:where(html) *{scrollbar-width:thin;"
+    "scrollbar-color:rgba(0,0,0,.22) transparent}}"
+)
+_SCROLLBAR_STYLE = '<style data-exhibit-kit="scrollbar">' + _SCROLLBAR_CSS + "</style>"
+
+
+# Where the user is in the page: reported to the viewer as they scroll (it remembers it per view), and
+# put back when the viewer asks.
+_PLACE_SCRIPT = """<script>(() => {
+  if (parent === window) return;
+  let timer = 0;
+  addEventListener("scroll", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => parent.postMessage({ channel: "exhibit-scroll", y: scrollY }, "*"), 150);
+  }, { passive: true });
+  addEventListener("message", (event) => {
+    if (event.source !== parent) return;
+    const m = event.data;
+    if (!m || m.channel !== "exhibit-scroll-to" || typeof m.y !== "number") return;
+    scrollTo({ top: m.y, behavior: "instant" });
+    parent.postMessage({ channel: "exhibit-scrolled", y: scrollY }, "*");
+  });
+})();</script>"""
+
+
 def _inject_bridge(page: str, thumbnail: bool = False, check: bool = False, exhibit_id: str | None = None) -> str:
     # The render check opens the page with no viewer around it: saving then works on a copy of the
     # saved data, as in an exported file, so only the page's own faults get reported.
     bridge = _standalone_bridge(exhibit_id) if check and exhibit_id else _BRIDGE_SCRIPT
-    scripts = (_CHECK_SCRIPT if check else "") + bridge + (_CALM_SCRIPT if thumbnail else _QUOTE_SCRIPT + _SNAPSHOT_SCRIPT)
+    scripts = _SCROLLBAR_STYLE + (_CHECK_SCRIPT if check else "") + bridge + (_CALM_SCRIPT if thumbnail else _QUOTE_SCRIPT + _SNAPSHOT_SCRIPT + _PLACE_SCRIPT)
+    if not thumbnail and not check and _has_items(page):
+        scripts += _ITEMS_SCRIPT
     scripts += _preset_scripts(page, thumbnail)
     return _insert_in_head(page, scripts)
 
@@ -5699,12 +6645,15 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
                 before = (_exhibit_dir(inputs["exhibit_id"]) / "meta.json").read_bytes()
             except OSError:
                 pass
+        picked = _FIRST_VIEW.get(session_id or "")
+        first_view = picked[1] if picked and time.monotonic() - picked[0] < _FIRST_VIEW_TTL else None
         meta, version = _save_version(
             inputs.get("title"),
             page,
             inputs.get("exhibit_id"),
             inputs.get("summary"),
             session_id,
+            first_view,
         )
         kind = _exhibit_kind(meta)
         # The render check runs before the page is opened: a page that breaks the page rules is taken
@@ -5721,6 +6670,8 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
                 "page_rules",
                 "Nothing was saved or shown: the page breaks Exhibit's page rules.\n- " + "\n- ".join(broken)
                 + f"\nFix the page (read the file again before editing it, or write it whole) and {again}.")
+        if before is None:
+            _FIRST_VIEW.pop(session_id or "", None)  # used: the next new exhibit gets its own pick
         _open_tab(meta["id"])
         url = f"{_ensure_server()}e/{meta['id']}"
         result = {
@@ -5728,7 +6679,7 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
             "title": meta["title"],
             "reference": _reference(meta),
             "version": version,
-            "preset": kind,
+            "view": _exhibit_view(meta) if kind == "freeform" else kind,
             "url": url,
             "opened": _open_browser(url, inputs.get("open")),
         }
@@ -5772,6 +6723,7 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
             "title": meta["title"],
             "reference": _reference(meta),
             "versions": len(meta["versions"]),
+            "view": _exhibit_view(meta),
             "data": _read_data(exhibit_id),
             **_session_fields(meta),
         }
@@ -5819,13 +6771,13 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
         return {"deleted": deleted, "not_found": not_found}
 
     if action == "preset":
-        return _preset(inputs.get("name"))
+        return _preset(inputs.get("name"), session_id)
 
     return {"stopped": _stop_server()}  # action == "stop"
 
 
-def _preset(name: Any) -> dict[str, Any]:
-    """A preset's starting page, or the list of presets when no name is given."""
+def _preset(name: Any, session_id: str | None = None) -> dict[str, Any]:
+    """The format question's answer: remembered as the view the next new exhibit opens in."""
     if name in (None, ""):
         return {
             "presets": [{"name": key, "use_for": text} for key, text in _PRESETS.items()],
@@ -5835,14 +6787,10 @@ def _preset(name: Any) -> dict[str, Any]:
     key = _PRESET_ALIASES.get(key, key)
     if key not in _PRESETS:
         raise _ToolFailure("invalid_preset", f"name must be one of: {', '.join(_PRESETS)}.")
-    name = key
-    if name == "freeform":
-        return {"preset": "freeform", "next": _FREEFORM_NEXT}
-    try:
-        page = (_PRESET_DIR / f"{name}.html").read_text(encoding="utf-8")
-    except OSError:
-        raise _ToolFailure("preset_missing", f"The {name} preset file is missing; write the page yourself.") from None
-    return {"preset": name, "html": page, "next": _CHARTS_NEXT if name == "charts" else _PRESET_NEXT}
+    view = _PRESET_VIEWS[key]
+    _FIRST_VIEW[session_id or ""] = (time.monotonic(), view)
+    return {"preset": key, "view": view,
+            "next": f"The exhibit will open {_VIEW_OPENS[view]} (the user can switch views). " + _FREEFORM_NEXT}
 
 
 class ExhibitTool(Tool):
@@ -5859,8 +6807,8 @@ class ExhibitTool(Tool):
                     "and other documents, slide decks, calculators, trackers, quizzes, UI mockups. Skip it for short "
                     "answers, or when the user wants a file in their project or in a specific format.\n\n"
                     'Before your first call, load the instructions: skill_tool with skill_name "exhibit". To make a '
-                    "new exhibit, call preset (no name needed). The user picks document, slides, Charts & Graphs or "
-                    "freeform, or an answer in chat, so calling preset is also how you suggest an exhibit; don't ask in chat first. "
+                    "new exhibit, call preset (no name needed). The user picks how it opens (document pages, slides "
+                    "or one page), or an answer in chat, so calling preset is also how you suggest an exhibit; don't ask in chat first. "
                     "If a result says [USER_CHOSE_CHAT], answer in chat and don't call exhibit again for that "
                     "request.\n\n"
                     "Send the page with show, in html or as a saved file in html_file (better for long pages). Don't "
@@ -5876,8 +6824,8 @@ class ExhibitTool(Tool):
                             "type": "string",
                             "enum": list(_ACTIONS),
                             "description": (
-                                "show: create an exhibit or add a new version; preset: get the starting page for a "
-                                "new exhibit, before writing it (the user picks which); list: list exhibits; gallery: open the "
+                                "show: create an exhibit or add a new version; preset: before writing a new exhibit, "
+                                "the user picks how it opens; list: list exhibits; gallery: open the "
                                 "Exhibits page in the user's browser, showing all their exhibits; read: get an "
                                 "exhibit's saved data (and HTML with include_html); open: reopen an exhibit; delete: "
                                 "remove an exhibit (the user confirms in a dialog); stop: stop the local exhibit server."
@@ -5888,8 +6836,8 @@ class ExhibitTool(Tool):
                             "type": "string",
                             "enum": list(_PRESETS),
                             "description": (
-                                "With preset: which one. Leave it out; the user is asked to pick document, "
-                                "slides, charts or freeform."
+                                "With preset: how it opens. Leave it out; the user is asked to pick document, "
+                                "slides or freeform."
                             ),
                         },
                         "html": {

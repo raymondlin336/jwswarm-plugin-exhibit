@@ -71,7 +71,7 @@ class FakeToolCall:
 
 SHOW_NEW = {"action": "show", "title": "Chart", "html": "<p>x</p>"}
 PRESET = {"action": "preset"}
-OPTIONS = ["Document", "Slides", "Charts & Graphs", "Freeform"]
+OPTIONS = ["Document", "Slides", "Freeform"]
 
 
 class ExhibitAskRailTests(unittest.TestCase):
@@ -319,13 +319,13 @@ class ExhibitAskRailTests(unittest.TestCase):
         self.turn("chart this data")
         self.assertEqual(self.resolve({"answers": {"q": "  "}}, **PRESET).kind, "interrupt")
 
-    def test_preset_descriptions_are_the_users_wording(self):
+    def test_preset_descriptions_say_how_the_exhibit_opens(self):
+        # 0.4.1: the pick only sets the view a new exhibit opens in; there's no Charts & Graphs any more.
         options = {o["label"]: o["description"] for o in MOD._question("en", False)["options"]}
         self.assertEqual(options, {
-            "Document": "Page by page document, export as PDF or .md",
-            "Slides": "A slide deck for presentations, export as PDF",
-            "Charts & Graphs": "Dynamic visualizations of data, export as PDF or PNG.",
-            "Freeform": "Written from scratch, no standard formats or templates.",
+            "Document": "Opens as document pages, export as PDF",
+            "Slides": "Opens as a slide deck, export as PDF",
+            "Freeform": "Opens as one scrolling page; switch to slides or pages any time",
         })
 
     def test_our_dialogs_have_no_custom_option(self):
@@ -362,7 +362,7 @@ class ExhibitAskRailTests(unittest.TestCase):
     def test_chinese_request_gets_chinese_options(self):
         self.turn("帮我把这个基准测试做成图表")
         (question,) = self.resolve(**PRESET).request.questions
-        self.assertEqual([o["label"] for o in question["options"]], ["文档", "幻灯片", "图表", "自由页面", "在对话中回答"])
+        self.assertEqual([o["label"] for o in question["options"]], ["文档", "幻灯片", "自由页面", "在对话中回答"])
         self.assertEqual(self.resolve({"a": "幻灯片"}, **PRESET).kind, "approve")
 
     def test_resume_turn_keeps_state(self):

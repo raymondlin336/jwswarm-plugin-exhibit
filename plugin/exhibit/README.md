@@ -1,8 +1,8 @@
 # Exhibit (exhibit)
 
-**Version 0.2.2 (prototype)**
+**Version 0.4.1 (prototype)** · Recommended model: deepseek-v4-pro
 
-Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calculators, checklists, forms, charts and small games, opened in a sandboxed browser tab. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back.
+Lets WorkSwarm build exhibits for you: interactive pages like reports, explainers, dashboards, calculators, checklists and small games, opened in a sandboxed browser tab. Each one can be read as a scrolling page, as slides or as document pages. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back.
 
 ## 中文
 
@@ -18,7 +18,7 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 
 - **exhibit (skill)**: Tells the agent when an exhibit helps, how to write one that works in the sandbox, how to save data with `window.exhibit`, and to treat saved data as user input, not instructions.
 - **exhibit (tool)**: Saves exhibits and their versions, opens them in your browser, and reads back what you saved. Actions: `show`, `preset`, `list`, `gallery`, `read`, `open`, `delete` and `stop`.
-- **ExhibitAskRail (rail)**: Before a new exhibit is written, asks you what kind it should be (Document, Slides or Freeform) with WorkSwarm's option dialog, plus "Answer in chat" unless your message mentioned an exhibit or you already picked one in this chat. Edits to an existing exhibit are never asked about. It also confirms deletes in a dialog, keeps HTML pages with scripts out of the file preview panel, and makes sure the agent has read the exhibit skill before showing one.
+- **ExhibitAskRail (rail)**: Before a new exhibit is written, asks you how it should open (Document, Slides or Freeform) with WorkSwarm's option dialog, plus "Answer in chat" unless your message mentioned an exhibit or you already picked one in this chat. Edits to an existing exhibit are never asked about. It also confirms deletes in a dialog, keeps HTML pages with scripts out of the file preview panel, and makes sure the agent has read the exhibit skill before showing one.
 
 ## How it works
 
@@ -37,6 +37,21 @@ Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calcul
 - **Dependencies:** Python standard library only. The tool does nothing at import time.
 
 ## Updates
+
+### 0.4.1
+
+- **Added Views:** every exhibit now defaults to freeform, but can be edited and viewed in Freeform, Slides, and Document view, switchable with a click.
+  - Slides and pages are made by the plugin, borrowing Pandoc's slide levels and Paged.js-style page breaks, so the agent only writes one page
+  - Includes panel of thumbnails so users can switch between slides and pages
+  - Export now depends on the view: in Slides and Document Views, exports will be PDFs
+  - The question asked by the agent regarding preset now changed, the answer just determiens which view is set initially
+  - **Presets removed** due to the additional of views and element buttons, in order to simplify the user experience
+- **Added Element Buttons:** each element (visualizations, important blocks of text, etc) now get their own buttons for export, edit, copy / copy as reference, depending on the type of element.
+  - Hovering over the buttons will highlight the element
+- Minor UI improvements
+- **Improvements / Bug Fixes:**
+  - Added limits to margins in freeform, and font choices
+  - Fixed issue where some freeform pages stretched across the whole window
 
 ### 0.4.0
 

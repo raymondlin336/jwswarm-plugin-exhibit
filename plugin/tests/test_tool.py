@@ -28,6 +28,8 @@ def _load_module():
 
 
 MOD = _load_module()
+# Pages made with the presets before 0.4.1: exhibits made from them must keep working.
+LEGACY_PRESETS = Path(__file__).resolve().parent / "fixtures" / "legacy-presets"
 _NO_PROXY = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -75,28 +77,32 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertEqual(self.tool.card.exposure, MOD.ToolExposure.DIRECT)
 
     # Presets -----------------------------------------------------------------
-    def test_preset_returns_the_starting_page(self):
-        for name in ("document", "slides"):
+    def test_preset_sets_the_view_a_new_exhibit_opens_in(self):
+        # 0.4.1: no starting pages. The user's pick only sets the view the next new exhibit opens in.
+        for name, view in (("document", "document"), ("slides", "slides"), ("Freeform ", "page"),
+                           ("none", "page"), ("charts", "page")):  # old names still work
             result = self.call(action="preset", name=name)
             self.assertTrue(result["success"], result)
-            self.assertEqual(result["preset"], name)
-            self.assertRegex(result["html"], f'<meta name="exhibit-preset" content="{name}@\\d+">')
-            self.assertIn("show", result["next"])
-        freeform = self.call(action="preset", name="Freeform ")
-        self.assertEqual((freeform["preset"], "html" in freeform), ("freeform", False))
-        # "none" was the old name, and still works.
-        self.assertEqual(self.call(action="preset", name="none")["preset"], "freeform")
+            self.assertEqual(result["view"], view)
+            self.assertNotIn("html", result)
+            self.assertIn("one idea per section", result["next"])
+        self.call(action="preset", name="slides")
+        shown = self.show(title="Picked slides")
+        self.assertEqual(shown["view"], "slides")
+        self.assertEqual(MOD._load_meta(shown["exhibit_id"])["view"], "slides")
+        self.assertIn("&view=slides", _http(shown["url"])[2])  # the viewer opens in it
+        self.assertEqual(self.show(title="Not picked")["view"], "page")  # each pick is used once
 
     def test_preset_without_a_name_lists_them_and_bad_names_fail(self):
         listed = self.call(action="preset")
-        self.assertEqual([p["name"] for p in listed["presets"]], ["document", "slides", "charts", "freeform"])
+        self.assertEqual([p["name"] for p in listed["presets"]], ["document", "slides", "freeform"])
         bad = self.call(action="preset", name="poster")
         self.assertEqual((bad["success"], bad["error_code"]), (False, "invalid_preset"))
-        self.assertEqual(self.tool.card.input_params["properties"]["name"]["enum"], ["document", "slides", "charts", "freeform"])
+        self.assertEqual(self.tool.card.input_params["properties"]["name"]["enum"], ["document", "slides", "freeform"])
 
     def test_preset_files_follow_the_exhibit_rules(self):
         for name in ("document", "slides"):
-            page = (MOD._PRESET_DIR / f"{name}.html").read_text(encoding="utf-8")
+            page = (LEGACY_PRESETS / f"{name}.html").read_text(encoding="utf-8")
             self.assertTrue(page.startswith("<!doctype html>"), name)
             # Theme: light by default, dark only for the screen theme, and paper always light.
             self.assertIn("@media (prefers-color-scheme: dark)", page, name)
@@ -115,8 +121,8 @@ class ExhibitToolTests(unittest.TestCase):
             self.assertIn("window.exhibit", served)
 
     def test_titles_show_what_kind_of_exhibit_it_is(self):
-        doc = self.show(title="Report", html=(MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8"))
-        deck = self.show(title="Deck", html=(MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8"))
+        doc = self.show(title="Report", html=(LEGACY_PRESETS / "document.html").read_text(encoding="utf-8"))
+        deck = self.show(title="Deck", html=(LEGACY_PRESETS / "slides.html").read_text(encoding="utf-8"))
         plain = self.show(title="Plain")
         kinds = {r["exhibit_id"]: MOD._exhibit_kind(MOD._load_meta(r["exhibit_id"])) for r in (doc, deck, plain)}
         self.assertEqual(list(kinds.values()), ["document", "slides", "freeform"])
@@ -130,37 +136,46 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertEqual(gallery.count('class="kind kind-document"'), 3)  # card, list row, open tab
         self.assertIn('"kind": "freeform"', gallery)  # for search results
 
-    def test_an_exhibit_never_changes_format(self):
-        doc_page = (MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8")
-        deck_page = (MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8")
+    def test_exhibits_made_from_old_presets_keep_working_and_change_freely(self):
+        doc_page = (LEGACY_PRESETS / "document.html").read_text(encoding="utf-8")
+        deck_page = (LEGACY_PRESETS / "slides.html").read_text(encoding="utf-8")
         doc = self.show(title="Report", html=doc_page)
         deck = self.show(title="Deck", html=deck_page)
-        plain = self.show(title="Plain")
-        self.assertEqual((doc["preset"], deck["preset"], plain["preset"]), ("document", "slides", "freeform"))
+        self.assertEqual((doc["view"], deck["view"]), ("document", "slides"))
         meta = lambda r: MOD._load_meta(r["exhibit_id"])
         self.assertEqual(meta(doc)["versions"][0]["preset"], "document")  # recorded with the version
         # Versions saved before 0.2.3 stored freeform as "exhibit": they still read as freeform.
         self.assertEqual(MOD._exhibit_kind({"id": "x", "versions": [{"version": 1, "preset": "exhibit"}]}), "freeform")
-        # An edit that keeps the format is fine.
-        self.assertTrue(self.show(exhibit_id=doc["exhibit_id"], html=doc_page.replace("Q3 2026", "Q4"))["success"])
-        # Any change of format is refused, in every direction, and nothing is saved.
-        for exhibit, page in ((doc, "<h1>One long page</h1>"), (doc, deck_page), (deck, doc_page),
-                              (deck, "<p>all slides in one page</p>"), (plain, doc_page), (plain, deck_page)):
-            refused = self.call(action="show", exhibit_id=exhibit["exhibit_id"], html=page)
-            self.assertEqual(refused["error_code"], "preset_locked", (exhibit["title"], page[:30]))
-            self.assertIn("make a new exhibit in the format they want", refused["error"])
-        self.assertEqual([len(meta(r)["versions"]) for r in (doc, deck, plain)], [2, 1, 1])
-        # A page that claims a preset must have its structure.
-        broken = doc_page.replace('<article class="sheet">', "<article>")
-        self.assertEqual(self.call(action="show", exhibit_id=doc["exhibit_id"], html=broken)["error_code"],
-                         "preset_structure")
-        self.assertNotIn("convert_to", self.tool.card.input_params["properties"])  # no switching for now
-        # The plugin's locked geometry for decks.
+        # No format to keep any more: an old deck's next version can be any page, and it opens in Slides.
+        made_before = meta(deck)
+        made_before.pop("view", None)
+        MOD._atomic_write(MOD._exhibit_dir(deck["exhibit_id"]) / "meta.json", json.dumps(made_before))
+        edited = self.show(exhibit_id=deck["exhibit_id"], html="<h1>Q3</h1><h2>One</h2><p>a</p>")
+        self.assertTrue(edited["success"], edited)
+        self.assertEqual((edited["view"], meta(deck)["view"]), ("slides", "slides"))
+        self.assertIn("&view=slides", _http(deck["url"])[2])
+        self.assertTrue(self.show(exhibit_id=doc["exhibit_id"], html=deck_page)["success"])
+        # The old decks' locked geometry still applies to their old versions.
         raw = _http(deck["url"].replace("/e/", "/raw/") + "/1")[2]
         self.assertIn("@page{size:13.333in 7.5in!important", raw)
         self.assertIn(".slide{aspect-ratio:16/9!important}", raw)
         # Speaker notes were removed; any left in older decks stay hidden.
         self.assertIn("#notes-panel,.notes-panel,.slide .notes{display:none!important}", raw)
+
+    def test_the_view_last_seen_is_saved_and_shown_by_the_icon(self):
+        shown = self.show(title="Plain")
+        base = shown["url"].split("/e/")[0]
+        put = lambda view: _http(base + "/api/" + shown["exhibit_id"] + "/view", "PUT",
+                                 json.dumps({"view": view}).encode(), {"Content-Type": "application/json"})
+        self.assertEqual(put("poster")[0], 400)
+        self.assertEqual(put("document")[0], 200)
+        self.assertEqual(self.call(action="read", exhibit_id=shown["exhibit_id"])["view"], "document")
+        viewer = _http(shown["url"])[2]
+        self.assertIn('let currentView = "document"', viewer)
+        self.assertIn('<span id="view-icon"><span class="kind kind-document"', viewer)
+        self.assertIn('"kind": "document"', _http(base + "/")[2])  # the gallery's icon too
+        _http(shown["url"] + "?view=slides")  # opening it in another view makes that the last one
+        self.assertEqual(MOD._load_meta(shown["exhibit_id"])["view"], "slides")
 
     def test_missing_page_error_says_what_the_call_had(self):
         # The agent kept insisting it sent html_file; the error now lists exactly what arrived.
@@ -171,7 +186,7 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn("html_file", missing["error"])
 
     def test_slides_preset_has_no_controls_of_its_own_and_fits_its_text(self):
-        page = (MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8")
+        page = (LEGACY_PRESETS / "slides.html").read_text(encoding="utf-8")
         # Printing is in Export, and moving between slides is added by Exhibit, not written in the deck.
         self.assertNotIn('class="controls"', page)
         self.assertNotIn('class="edge', page)
@@ -182,8 +197,8 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertNotIn("40 words", page)
 
     def test_pages_and_slides_get_navigation_from_exhibit_not_the_page(self):
-        deck = self.show(title="Deck", html=(MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8"))
-        doc = self.show(title="Report", html=(MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8"))
+        deck = self.show(title="Deck", html=(LEGACY_PRESETS / "slides.html").read_text(encoding="utf-8"))
+        doc = self.show(title="Report", html=(LEGACY_PRESETS / "document.html").read_text(encoding="utf-8"))
         plain = self.show(title="Plain")
         raw = lambda r, extra="": _http(r["url"].replace("/e/", "/raw/") + "/1" + extra)[2]
         # Decks get slide navigation (also in thumbnails, to show the first slide); documents get pages.
@@ -202,7 +217,8 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn('id="pager"', _http(deck["url"])[2])
         self.assertIn('aria-label="Current slide"', _http(deck["url"])[2])
         self.assertIn('aria-label="Current page"', _http(doc["url"])[2])
-        self.assertNotIn('id="pager"', _http(plain["url"])[2])
+        # A freeform page has its page control hidden until it's switched to the Slides or Document view.
+        self.assertIn('id="pager" role="group" aria-label="Pages" hidden', _http(plain["url"])[2])
         # An exported deck brings its own buttons; an exported document its pages.
         self.assertIn("exhibit-slide-nav", MOD._export_html(deck["exhibit_id"], None)[1])
         self.assertIn("exhibit-page-stage", MOD._export_html(doc["exhibit_id"], None)[1])
@@ -210,7 +226,7 @@ class ExhibitToolTests(unittest.TestCase):
 
     @unittest.skipUnless(MOD._pdf_browser(), "needs Edge or Chrome")
     def test_pdf_of_a_document_is_letter_pages(self):
-        doc = self.show(title="Report", html=(MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8"))
+        doc = self.show(title="Report", html=(LEGACY_PRESETS / "document.html").read_text(encoding="utf-8"))
         _, pdf = MOD._export_pdf(doc["exhibit_id"], None)
         self.assertEqual(set(re.findall(rb"/MediaBox\s*\[([^\]]*)\]", pdf)), {b"0 0 612 792"})
 
@@ -350,7 +366,7 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn("write_file", not_there["error"])
 
     def test_markdown_export_of_a_document(self):
-        doc = self.show(title="Q3 report", html=(MOD._PRESET_DIR / "document.html").read_text(encoding="utf-8"))
+        doc = self.show(title="Q3 report", html=(LEGACY_PRESETS / "document.html").read_text(encoding="utf-8"))
         name, md, files = MOD._export_markdown(doc["exhibit_id"], None)
         self.assertEqual((name, files), ("Q3 report.md", {}))
         self.assertIn("# Support response times, Q3 2026", md)
@@ -532,13 +548,10 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn("@exhibit(...)", params["exhibit_id"]["description"])
         self.assertIn("one dialog", params["exhibit_ids"]["description"])
 
-    def test_charts_preset_is_drawn_from_its_data_block_and_checked(self):
-        # Charts & Graphs (0.3.0): the agent fills in text and a JSON block; the plugin draws the charts.
-        result = self.call(action="preset", name="charts")
-        self.assertEqual(result["preset"], "charts")
-        self.assertIn('id="exhibit-charts"', result["next"])
-        self.assertEqual(self.call(action="preset", name="Charts & Graphs")["preset"], "charts")
-        page = result["html"]
+    def test_old_charts_exhibits_are_still_drawn_from_their_data_block(self):
+        # Charts & Graphs pages (0.3.0 to 0.4.0): the plugin draws the charts from the page's JSON block. No
+        # new ones are made since 0.4.1, but exhibits made then still open and edit as before.
+        page = (LEGACY_PRESETS / "charts.html").read_text(encoding="utf-8")
         shown = self.show(title="Sales charts", html=page)
         self.assertEqual(MOD._exhibit_kind(MOD._load_meta(shown["exhibit_id"])), "charts")
         raw = _http(shown["url"].replace("/e/", "/raw/") + "/1")[2]
@@ -547,30 +560,11 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertLess(raw.index("host.chart = "), raw.index('document.getElementById("exhibit-charts")'))
         viewer = _http(shown["url"])[2]
         self.assertIn('class="kind kind-charts"', viewer)
-        self.assertIn('label: "PDF (.pdf)"', viewer)  # PDF export, as for documents and slides
-        self.assertNotIn("note", shown)  # its data block isn't "a table of its own"
-        # A broken data block is refused, saying what's wrong; so is leaving the format.
-        for broken, words in ((page.replace('"charts": [', '"chartz": [', 1), "has no charts"),
-                              (page.replace('"type": "line"', '"type": "spiral"', 1), "must be one of"),
-                              (page.replace('"type": "donut"', '"type": "funnel"', 1), "uses a funnel chart; stats work on line, area, bar, pie and donut"),
-                              (page.replace('"prefix": "$",', '"prefix": "$",,', 1), "isn't valid JSON")):
-            failed = self.call(action="show", title="Broken", html=broken)
-            self.assertEqual(failed.get("error_code"), "preset_structure")
-            self.assertIn(words, failed["error"])
-        locked = self.call(action="show", exhibit_id=shown["exhibit_id"], html="<p>plain</p>")
-        self.assertEqual(locked.get("error_code"), "preset_locked")
-        # Stat tiles (after round 5): declared in the block, drawn and recalculated by the plugin from
-        # the chart's current data (onChange), and checked on show.
-        self.assertIn('"stats": [', page)
+        self.assertIn('label: "PDF (.pdf)"', viewer)
         for setting in ('case "growth":', 'onChange: (data) => { latest[spec.id] = data; refresh(spec.id); }', '"exhibit-stats"'):
             self.assertIn(setting, MOD._CHARTS_SCRIPT)
-        for broken, words in ((page.replace('"chart": "sales", "value": "sum"', '"chart": "nope", "value": "sum"', 1), "isn't in \"charts\""),
-                              (page.replace('"value": "sum" }', '"value": "median" }', 1), "must be one of"),
-                              (page.replace('"series": "North"', '"series": "South"', 1), "names series 'South'"),
-                              (page.replace('"show": "both"', '"show": "all"', 1), "must be value, label or both")):
-            failed = self.call(action="show", title="Bad stats", html=broken)
-            self.assertEqual(failed.get("error_code"), "preset_structure", broken[:0] + words)
-            self.assertIn(words, failed["error"])
+        # Its next version can be any page.
+        self.assertTrue(self.show(exhibit_id=shown["exhibit_id"], html="<p>plain</p>")["success"])
 
     def test_viewer_has_the_edit_data_button_and_png_export(self):
         # Edit data lives in the viewer's top bar for every exhibit (shown once the page reports charts).
@@ -594,8 +588,52 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn('"exhibit-chart-edit"', viewer)
         self.assertIn('"exhibit-chart-reset"', viewer)
 
+    def test_item_rail_on_freeform_pages_with_kit_charts_or_diagrams(self):
+        # 0.4.1: freeform pages with kit charts or diagrams get a column of tools beside each one, outside
+        # the page, and no Edit data in the top bar.
+        charted = self.show(title="Rail", html='<h2>Sales</h2><div id="sales"></div><script>exhibit.chart("#sales", '
+                            '{type:"bar", x:["a"], series:{S:[1]}})</script>')
+        viewer = _http(charted["url"])[2]
+        self.assertIn("const dataInBar = false;", viewer)
+        self.assertIn("const toggleChartData = (key) =>", viewer)
+        for label in ('"PNG image (.png)", run: () => exportPng(it)', '"PDF (.pdf)", run: () => exportItem(it, "pdf"',
+                      '"HTML file (.html)", run: () => exportItem(it, "html"'):
+            self.assertIn(label, viewer)
+        # The buttons are drawn in the page, in a closed shadow root, and scroll with it.
+        raw = _http(charted["url"].replace("/e/", "/raw/") + "/1")[2]
+        self.assertIn("window.__exhibitItems = () =>", raw)
+        self.assertIn('host.attachShadow({ mode: "closed" })', raw)
+        self.assertIn('channel: "exhibit-item-action"', raw)
+        self.assertNotIn("__ICONS__", raw)
+        # Diagrams count too; pages without either, and presets, keep the top bar as it was.
+        drawn = self.show(title="Flow", html='<pre class="exhibit-diagram">flowchart LR\n  A --> B</pre>')
+        self.assertIn("const dataInBar = false;", _http(drawn["url"])[2])
+        plain = _http(self.show(title="Plain")["url"])
+        self.assertIn("const dataInBar = true;", plain[2])
+        self.assertNotIn("window.__exhibitItems = () =>", _http(self.show(title="Plain2")["url"].replace("/e/", "/raw/") + "/1")[2])
+        self.assertNotIn("window.__exhibitItems = () =>", MOD._inject_bridge('<div></div><script>exhibit.chart("#x",{})</script>', thumbnail=True))
+        # Callouts, panels and code blocks get a Copy button; the viewer copies the text the page sends.
+        for html in ('<aside class="ex-callout ex-warn"><p>x</p></aside>', "<div class='ex-panel'><h4>x</h4></div>", "<pre><code>x</code></pre>"):
+            self.assertTrue(MOD._has_items(html), html)
+        self.assertFalse(MOD._has_items('<p class="ex-tag">x</p><div class="ex-callouts">x</div>'))
+        copied = self.show(title="Copy", html='<aside class="ex-callout"><p>Key finding.</p></aside>')
+        self.assertIn('ask("copy", c.it, b)', _http(copied["url"].replace("/e/", "/raw/") + "/1")[2])
+        self.assertIn('if (m.action === "copy")', _http(copied["url"])[2])
+        # One item as HTML (or PDF): the page with everything else hidden, named after the item.
+        name, page = MOD._export_html(charted["exhibit_id"], None, "chart:sales", "Sales")
+        self.assertEqual(name, "Rail - Sales.html")
+        self.assertIn('const wanted = "chart:sales";', page)
+        self.assertIn("window.__exhibitItems = () =>", page)
+        with self.assertRaises(MOD._ToolFailure):
+            MOD._export_html(charted["exhibit_id"], None, "<script>", None)
+        base = charted["url"].replace("/e/", "/api/")
+        self.assertEqual(_http(base + "/export?format=md&item=chart:sales")[0], 400)
+        status, headers, _ = _http(base + "/export?format=html&item=chart:sales&iname=Sales")
+        self.assertEqual(status, 200)
+        self.assertIn("Rail - Sales.html", headers.get("Content-Disposition", ""))
+
     def test_new_exhibit_page_offers_formats_and_a_conversation(self):
-        # New exhibit opens a page: a box to ask WorkSwarm and the four formats with previews.
+        # New exhibit opens a page: a box to ask WorkSwarm and the three ways an exhibit can open.
         # Neither is connected (a plugin can't start a chat); both say so.
         shown = self.show(title="Any")
         base = shown["url"].split("/e/")[0] + "/"
@@ -604,16 +642,13 @@ class ExhibitToolTests(unittest.TestCase):
         status, _, page = _http(base + "new")
         self.assertEqual(status, 200)
         self.assertIn('class="new-btn on"', page)
-        for name in ("Document", "Slides", "Charts &amp; Graphs", "Freeform"):
+        for name in ("Document", "Slides", "Freeform"):
             self.assertIn(name, page)
-        self.assertEqual(page.count('class="card format-card"'), 4)
+        self.assertNotIn("Charts &amp; Graphs", page)
+        self.assertEqual(page.count('class="card format-card"'), 3)
         self.assertIn('id="ask-text"', page)
         self.assertIn("Not connected yet", page)
-        for kind in ("document", "slides", "charts"):
-            status, _, preview = _http(base + "preset/" + kind)
-            self.assertEqual(status, 200)
-            self.assertIn("window.__exhibitCalm = true", preview)  # drawn like a thumbnail
-        self.assertEqual(_http(base + "preset/freeform")[0], 404)
+        self.assertEqual(_http(base + "preset/slides")[0], 404)  # no sample pages since 0.4.1
 
     def test_edit_data_panel_resizes_and_has_no_edited_dot(self):
         viewer = _http(self.show(title="Any")["url"])[2]
@@ -642,8 +677,10 @@ class ExhibitToolTests(unittest.TestCase):
             self.assertNotIn(gone, skill)
         self.assertIn("exhibit.chart(", skill)
         self.assertNotIn("100 values", skill)  # every chart has the Edit data table
-        self.assertIn("every chart's data can be edited from the **Edit data** button in the exhibit's top bar", skill)
-        self.assertIn('**Charts & Graphs** (`"preset": "charts"`)', skill)
+        self.assertIn("every chart's data can be edited from the **Edit data** button beside it", skill)
+        # 0.4.1: no presets; the pick sets the view, and pages are written in sections.
+        self.assertNotIn("Charts & Graphs", skill)
+        self.assertIn("one idea per section", skill)
         self.assertNotIn("chart.js@", skill)  # the kit replaced the hand-written Chart.js advice
         # Phase 4: the agent hand-wrote ECharts, so the skill says not to, and names onChange for linked parts.
         self.assertIn("Don't load Chart.js, ECharts or any other chart library for these", skill)
@@ -734,9 +771,52 @@ class ExhibitToolTests(unittest.TestCase):
         raw = _http(exhibit["url"].replace("/e/", "/raw/") + "/1")[2]
         self.assertIn('m.channel === "exhibit-print"', raw)
 
+    def test_freeform_views_switch_layout_and_export(self):
+        # 0.4.1: a freeform exhibit can be viewed as its page, as slides or as document pages. The view sets
+        # what Export offers: a PDF of those slides or pages in the Slides and Document views.
+        shown = self.show(title="Plain")
+        page = _http(shown["url"])[2]
+        self.assertIn('<nav class="views" aria-label="View">', page)
+        self.assertIn('<a href="?view=slides" data-view="slides">Slides</a>', page)
+        self.assertIn('let currentView = "page"', page)
+        self.assertIn("const switchView = (next) =>", page)  # switched in place, behind a loading cover
+        self.assertIn('id="frame-loading"', page)
+        slides = _http(shown["url"] + "?view=slides")[2]
+        self.assertIn('let currentView = "slides"', slides)
+        self.assertIn('const moldView = currentView === "page" ? "" : currentView;', slides)
+        self.assertIn('id="pager"', slides)
+        self.assertIn("&view=slides", slides)
+        raw = _http(shown["url"].replace("/e/", "/raw/") + "/1?view=slides")[2]
+        self.assertIn("window.__exhibitMoldView = true", raw)
+        self.assertIn('addEventListener("exhibit-slides-ready"', raw)
+        raw = _http(shown["url"].replace("/e/", "/raw/") + "/1?view=document")[2]
+        self.assertIn("exhibit-mold-sheet", raw)
+        self.assertIn("exhibit-page-stage", raw)
+        self.assertNotIn("__exhibitMoldBlocks", _http(shown["url"].replace("/e/", "/raw/") + "/1")[2])
+        # Presets keep their single view.
+        deck = self.show(title="Deck", html=(LEGACY_PRESETS / "slides.html").read_text(encoding="utf-8"))
+        self.assertNotIn('class="views"', _http(deck["url"] + "?view=document")[2])
+        self.assertEqual(set(MOD._MOLDS), {"slides", "document"})
+        with self.assertRaises(MOD._ToolFailure):
+            MOD._export_pdf(shown["exhibit_id"], None, mold="poster")
+
+    @unittest.skipUnless(MOD._pdf_browser(), "needs Edge or Chrome")
+    def test_slides_mold_splits_a_freeform_page_like_pandoc(self):
+        # Pandoc's rules: the first <h1> and a paragraph after it are the title slide; each <h2> (the slide
+        # level here) starts a slide; an <h3> stays inside its slide.
+        page = ("<!doctype html><html><head><meta charset='utf-8'></head><body><h1>Trip report — Q3</h1><p>Subtitle</p>"
+                "<h2>One</h2><p>First.</p><h3>Detail</h3><p>Inside one.</p><h2>Two</h2><p>Second.</p></body></html>")
+        shown = self.show(title="Trip", html=page)
+        name, pdf = MOD._export_pdf(shown["exhibit_id"], None, mold="slides")
+        self.assertEqual(name, "Trip (slides).pdf")
+        self.assertEqual(pdf.count(b"/Type /Page") - pdf.count(b"/Type /Pages"), 3)
+        name, pdf = MOD._export_pdf(shown["exhibit_id"], None, mold="document")
+        self.assertEqual(name, "Trip.pdf")
+        self.assertTrue(pdf.startswith(b"%PDF"))
+
     @unittest.skipUnless(MOD._pdf_browser(), "needs Edge or Chrome")
     def test_pdf_export_prints_slides_at_slide_size(self):
-        deck = self.show(title="Deck: Q3 / review", html=(MOD._PRESET_DIR / "slides.html").read_text(encoding="utf-8"))
+        deck = self.show(title="Deck: Q3 / review", html=(LEGACY_PRESETS / "slides.html").read_text(encoding="utf-8"))
         base = deck["url"].split("/e/")[0]
         url = f"{base}/api/{deck['exhibit_id']}/export?format=pdf"
         with _NO_PROXY.open(urllib.request.Request(url), timeout=60) as r:
@@ -881,6 +961,9 @@ class ExhibitToolTests(unittest.TestCase):
         put = json.dumps({"op": "panel", "collapsed": False}).encode()
         _http(base + "/api/tabs", "PUT", put, {"Content-Type": "application/json"})
         self.assertIn('<body class="">', _http(base + "/")[2])
+        # 0.4.1: opening an exhibit collapses the column, giving the exhibit the room.
+        self.assertIn('<body class="collapsed">', _http(exhibit["url"])[2])
+        self.assertNotIn("flyout", _http(exhibit["url"])[2])
 
     def test_titles_cannot_break_out_of_the_inline_config(self):
         exhibit = self.show(title="</script><script>alert(1)</script>")
@@ -1302,7 +1385,7 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertEqual(set(specs), set(MOD._CHART_TYPES))
         calls = "".join(f'<div id="c-{k}"></div><script>exhibit.chart("#c-{k}", {json.dumps({"type": k, "title": k, "yLabel": "Units", **v})})</script>'
                         for k, v in specs.items())
-        drawn = self.show(html="<h1>Every type</h1>" + calls)
+        drawn = self.show(html='<main style="max-width:960px;margin:0 auto"><h1>Every type</h1>' + calls + "</main>")
         self.assertNotIn("note", drawn)  # no script errors, nothing the kit refused
         bad = self.show(html='<div id="s"></div><script>exhibit.chart("#s", {type: "sankey", data: {"In Out": 5}})</script>')
         self.assertIn('Each sankey link is written \\"From → To\\"', json.dumps(bad["note"], ensure_ascii=False))
@@ -1314,6 +1397,11 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertTrue(MOD._uses_page_parts('<aside class="ex-callout">x</aside>'))
         self.assertTrue(MOD._uses_page_parts("<span class='note ex-tag ex-warn'>x</span>"))
         self.assertFalse(MOD._uses_page_parts('<div class="flex-row index-card">x</div>'))
+        # Every page gets a default font, first in <head> and with zero specificity, so the page's own wins.
+        page = MOD._inject_bridge("<html><head><style>body{font-family:Georgia}</style></head><body><p>x</p></body></html>")
+        self.assertIn('data-exhibit-kit="font"', page)
+        self.assertLess(page.index('data-exhibit-kit="font"'), page.index("font-family:Georgia"))
+        self.assertIn(":where(html){font-family:system-ui", MOD._BASE_FONT_STYLE)
         self.assertNotIn("@layer", MOD._PARTS_STYLE)
         self.assertNotIn("!important", MOD._PARTS_STYLE)
         plain = self.show(html="<p>No parts here.</p>")
@@ -1326,8 +1414,8 @@ class ExhibitToolTests(unittest.TestCase):
         probe = ('<script>document.body.insertAdjacentText("beforeend", " EDGES " + [...document.querySelectorAll(".ex-callout")]'
                  '.map((e) => getComputedStyle(e).borderLeftColor).join("|") + " STEP " + getComputedStyle(document.querySelector(".ex-steps li")).paddingLeft'
                  ' + " LIST " + getComputedStyle(document.querySelector(".ex-panel ul")).paddingLeft);</script>')
-        body = (f'<h1>Parts</h1><aside class="ex-callout"><p>{prose}</p></aside><div class="mine"><aside class="ex-callout"><p>{prose}</p></aside></div>'
-                f'<div class="ex-panel"><h4>Problems</h4><ul><li>{prose}</li></ul></div><ol class="ex-steps"><li><b>Retrieve</b>Each method searches.</li></ol>')
+        body = (f'<main style="max-width:960px;margin:0 auto"><h1>Parts</h1><aside class="ex-callout"><p>{prose}</p></aside><div class="mine"><aside class="ex-callout"><p>{prose}</p></aside></div>'
+                f'<div class="ex-panel"><h4>Problems</h4><ul><li>{prose}</li></ul></div><ol class="ex-steps"><li><b>Retrieve</b>Each method searches.</li></ol></main>')
         # A page with a blanket reset and no CSS for the parts: the reset doesn't flatten them, and there's no note.
         reset = self.show(html="<style>* { margin: 0; padding: 0; } li { margin-bottom: .7rem; }</style>" + body + probe)
         self.assertNotIn("note", reset)
@@ -1395,6 +1483,11 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertEqual(MOD._page_rules({"errors": []}, "freeform"), [])
         self.assertIn("1 block of text is drawn in a box", MOD._layout_note({"layout": layout}, "freeform"))
         self.assertIsNone(MOD._layout_note({"layout": layout}, "document"))
+        # Page width: freeform pages keep to a 960 px column; a little over is fine, other formats aren't checked.
+        wide = {"layout": {"column": 1240, "window": 1280}}
+        self.assertIn("runs 1240 px wide in a 1280 px window", MOD._layout_note(wide, "freeform"))
+        self.assertIsNone(MOD._layout_note(wide, "document"))
+        self.assertIsNone(MOD._layout_note({"layout": {"column": 1000, "window": 1280}}, "freeform"))
         self.assertIn("and 2 more", MOD._quote_list(["a", "b", "c", "d", "e"]))
 
     def test_page_rules_in_a_real_browser(self):
@@ -1433,7 +1526,7 @@ class ExhibitToolTests(unittest.TestCase):
                             f'<a href="#s1">Jump</a>{sections}')
         self.assertNotIn("note", ok)
         for name in ("document", "charts", "slides"):
-            sample = (MOD._PRESET_DIR / f"{name}.html").read_text(encoding="utf-8")
+            sample = (LEGACY_PRESETS / f"{name}.html").read_text(encoding="utf-8")
             self.assertTrue(self.call(action="show", title=f"Sample {name}", html=sample)["success"], name)
         # Prose in a box is advice, not a refusal.
         boxed = self.show(html='<h1>Methods</h1><div style="border:1px solid #ccc;padding:12px"><h3>Keyword</h3>'
