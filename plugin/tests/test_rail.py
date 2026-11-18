@@ -150,6 +150,11 @@ class ExhibitAskRailTests(unittest.TestCase):
         # A call that sends its own page is left alone.
         call, _ = self.ask("call-b", action="show", exhibit_id="plain-aaa111", html="<p>own</p>")
         self.assertNotIn("html_file", json.loads(call.arguments))
+        # So is one that changes the saved page with edits (0.4.2).
+        call, decision = self.ask("call-d", action="show", exhibit_id="plain-aaa111",
+                                  edits=[{"old": "x", "new": "y"}])
+        self.assertEqual(decision.kind, "approve")
+        self.assertNotIn("html_file", json.loads(call.arguments))
         # With no saved page there's nothing to fill in.
         page.unlink()
         call, _ = self.ask("call-c", action="show", exhibit_id="plain-aaa111")
@@ -546,6 +551,26 @@ class ExhibitAskRailTests(unittest.TestCase):
         text = self.brief("why is this so high?\n@exhibit(Monthly budget #abc123)\n> Rent | $1,500 | Fixed")
         self.assertIn("latest version unless they name another", text)
         self.assertIn('Lines starting with "> " right after a reference are text the user selected', text)
+
+    def test_references_to_a_slide_or_page_say_what_is_on_it(self):
+        # 0.4.2, page awareness: a quote or an item copied in the Slides or Document view names its slide or page,
+        # and the agent gets what is on it from the outline show keeps with the version.
+        refs = MOD._find_references("@exhibit(Deck #abc123, slide 4) and @exhibit(Deck #abc123, version 2, page 3), "
+                                    "@exhibit(Deck #abc123, slide 6) and @exhibit(Deck #abc123, page 5, v2)")
+        # One entry per exhibit and version, holding every place pointed at (in either order with the version).
+        self.assertEqual([(r["code"], r["version"], r["where"]) for r in refs],
+                         [("abc123", None, [("slide", 4), ("slide", 6)]), ("abc123", 2, [("page", 3), ("page", 5)])])
+        folder = Path(self.tmp.name, "exhibits", "budget-abc123")
+        (folder / "meta.json").write_text(json.dumps({"id": "budget-abc123", "title": "Monthly budget",
+                                                      "versions": [{"version": 1}]}), encoding="utf-8")
+        (folder / "outline-v1.json").write_text(json.dumps({"build": "x", "outline": {
+            "slides": [{"slide": 1, "title": "Budget"}, {"slide": 2, "title": "Rent", "has": ["chart: Rent by month"]}]}}),
+            encoding="utf-8")
+        text = self.brief("why so high?\n@exhibit(Monthly budget #abc123, slide 2)\n> Rent went up")
+        self.assertIn("The user pointed at slide 2 (as the Slides view lays the exhibit out). On it", text)
+        self.assertIn('"chart: Rent by month"', text)
+        text = self.brief("@exhibit(Monthly budget #abc123, page 7)")
+        self.assertIn("pointed at page 7 (as the Document view lays the exhibit out); exhibit read's pages", text)
 
     def test_references_name_the_chat_an_exhibit_was_made_in(self):
         meta = Path(self.tmp.name, "exhibits", "budget-abc123", "meta.json")

@@ -6,8 +6,10 @@ Standard library only.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import html as html_lib
+import http.client
 import json
 import os
 import re
@@ -61,6 +63,12 @@ def _build_id() -> str:
 _BUILD = _build_id()
 _ACTIONS = ("show", "preset", "list", "gallery", "read", "open", "delete", "stop")
 
+# How every fix message asks for a change: small edits on the saved version, not the whole page written out
+# again (most changes are small; a rewrite costs a minute of output).
+_EDITS_HINT = ("with edits: call show with this exhibit_id and edits: [{old, new}], each old copied exactly from the "
+               "page (send the whole page only if most of it changes)")
+
+
 # The format question (0.4.1): the user picks how a new exhibit first opens. The agent always writes one
 # page, and the viewer shows it as that page, as slides or as document pages (the user can switch).
 # Before 0.4.1 these were presets, ready-made starting pages; exhibits made from them still open as
@@ -106,8 +114,8 @@ _OWN_CHART_NOTE = (
     "exhibit.chart(element, spec) (see the exhibit instructions): it adds hover details, zooming and theme colors, "
     "and only its charts can be edited from Edit data in the exhibit's top bar. If this page draws any of those "
     "with the library, fix it now, before you reply: redraw them with exhibit.chart, drop the library if nothing "
-    "else needs it (read the file again before editing it, or write it whole), and call show again with this "
-    "exhibit_id. Keep the library only for other kinds of visual (maps, networks and so on)."
+    "else needs it, and call show again with this exhibit_id and edits: [{old, new}] (the whole page only if "
+    "most of it changes). Keep the library only for other kinds of visual (maps, networks and so on)."
 )
 # Diagrams (0.4.0): the agent writes Mermaid in <pre class="exhibit-diagram"> and the plugin draws it.
 # Pages that bring their own Mermaid get a note, and so do diagrams the kit can tell are wrong before
@@ -119,8 +127,7 @@ _OWN_MERMAID_NOTE = (
     "This page loads or uses Mermaid itself. Exhibit draws Mermaid diagrams for you: put each diagram's Mermaid "
     "text in <pre class=\"exhibit-diagram\">...</pre> (see the exhibit instructions), with no Mermaid script or "
     "class=\"mermaid\". The plugin then draws it in the page's colours, light and dark, and in the PDF. Fix it now, "
-    "before you reply: change the page (read the file again before editing it, or write it whole) and call show "
-    "again with this exhibit_id."
+    "before you reply: change the page " + _EDITS_HINT + "."
 )
 _DIAGRAM_TYPES = {
     "flowchart", "graph", "sequencediagram", "classdiagram", "classdiagram-v2", "statediagram", "statediagram-v2",
@@ -165,6 +172,26 @@ def _diagram_type(source: str) -> str:
     return ""
 
 
+# Colour variables a page draws with but never declares (0.4.2, Office perk satisfaction: an SVG drew with
+# var(--fg) and var(--line) in a page with no :root block). Exhibit fills in the skill's light colours, but the
+# page then can't follow dark mode, so the agent is told to declare them. Exhibit's own (--ex-*, --exhibit-*)
+# and ones used with a fallback, var(--x, #333), are left out.
+_VAR_USED_RE = re.compile(r"var\(\s*--([\w-]+)\s*\)")
+_VAR_DECLARED_RE = re.compile(r"--([\w-]+)\s*:")
+
+
+def _undeclared_colors_note(page: str) -> str | None:
+    declared = set(_VAR_DECLARED_RE.findall(page))
+    missing = sorted({n for n in _VAR_USED_RE.findall(page) if n not in declared and not n.startswith(("ex-", "exhibit-"))})
+    if not missing:
+        return None
+    names = ", ".join(f"--{n}" for n in missing[:6]) + (" …" if len(missing) > 6 else "")
+    return (f"The page uses CSS variables it never declares ({names}). Exhibit fills in its light colours for the "
+            "ones in the exhibit instructions, so the page can't follow dark mode, and any others draw nothing. Declare "
+            "them in a :root block with a dark variant (see \"Follow the user's system theme\" in the exhibit "
+            "instructions) " + _EDITS_HINT + ".")
+
+
 def _diagram_note(page: str) -> str | None:
     """A note for show about the page's diagrams, or None when they look right."""
     if _OWN_MERMAID.search(page):
@@ -181,18 +208,18 @@ def _diagram_note(page: str) -> str | None:
     if charts:
         return (f"{', '.join(charts).capitalize()} is a chart made with Mermaid. Numbers belong in exhibit.chart "
                 "(see the exhibit instructions), where the user can edit them from Edit data. Fix it now, before you "
-                "reply: replace it with exhibit.chart and call show again with this exhibit_id.")
+                "reply: replace it with exhibit.chart and call show again with this exhibit_id and edits.")
     if problems:
         return ("A diagram can't be drawn: " + " ".join(problems) + " The first line of each exhibit-diagram block "
                 "must be the diagram type, such as flowchart LR, sequenceDiagram, stateDiagram-v2 or erDiagram. Fix "
-                "it now and call show again with this exhibit_id.")
+                "it now and call show again with this exhibit_id and edits.")
     # Kit round 1 (2026-11-11): no flowchart or state diagram got %% step lines, so they were static.
     stepless = [f"diagram {n}" for n, source in enumerate(_diagram_sources(page), 1)
                 if _diagram_type(source) in _STEPPED_BY_HAND and not _STEP_LINE.search(source)]
     if stepless:
         return (f"{', '.join(stepless).capitalize()} has no step-through. If it shows an order (the steps of a "
                 "process, state changes, a request moving through systems), add %% step lines (see the exhibit "
-                "instructions) and call show again with this exhibit_id. If it only shows structure, add "
+                "instructions) and call show again with this exhibit_id and edits. If it only shows structure, add "
                 "\"%% steps: off\" next time and leave this one.")
     return None
 
@@ -209,8 +236,7 @@ _OWN_TABLE = re.compile(r"<table\b|createElement\(\s*[\"']table", re.I)
 _OWN_TABLE_NOTE = ("This page has a table of its own next to exhibit.chart. Unless the user asked for a table, or a table "
                    "is the only way to show this data, remove it: the chart shows the data, and the Edit data button in "
                    "the exhibit's top bar edits it. A table that stays needs editable cells. Fix it now, before "
-                   "you reply: change the page (read the file again before editing it, or write it whole) and call "
-                   "show again with this exhibit_id. If the user asked for this table, leave it and say nothing.")
+                   "you reply: change the page " + _EDITS_HINT + ". If the user asked for this table, leave it and say nothing.")
 
 # Exhibits may load scripts and styles from these CDNs, and nothing else from the network.
 _CDNS = "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com"
@@ -283,6 +309,7 @@ _LIB_LOADER_SCRIPT = "<script>" + r"""(() => {
   const add = (src, check) => new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.src = src;
+    s.dataset.exhibitLib = "";  // the render check leaves its load errors to the kits, which report a real failure
     s.onload = () => (check() ? resolve(check()) : reject(new Error("didn't load")));
     s.onerror = () => { s.remove(); reject(new Error("couldn't be downloaded")); };
     document.head.appendChild(s);
@@ -327,7 +354,7 @@ def _fetch_libraries() -> None:
         try:
             with urllib.request.urlopen(lib["url"], timeout=120) as r:
                 data = r.read(lib["size"] + 1)
-        except OSError:
+        except (OSError, http.client.HTTPException):  # a download cut off midway is an IncompleteRead, not an OSError
             continue  # no network now: pages use the CDN, and the next run tries again
         if len(data) != lib["size"] or hashlib.sha256(data).hexdigest() != lib["sha256"]:
             continue  # not the file we pinned: never keep it
@@ -882,11 +909,14 @@ async function deleteExhibit(id, title) {
 }
 // References and quotes: text to paste into a WorkSwarm chat, where the agent recognises it.
 // They never name a version: the agent assumes the latest unless the user says otherwise.
-function referenceFor(id, title) {
-  return "@exhibit(" + title + " #" + id.slice(id.lastIndexOf("-") + 1) + ")";
+// A quote or an item from the Slides or Document view also names its slide or page: "@exhibit(Deck #ab12cd, slide 4)".
+function referenceFor(id, title, where) {
+  const at = where && (where.kind === "slide" || where.kind === "page") && Number.isInteger(where.n) && where.n > 0
+    ? ", " + where.kind + " " + where.n : "";
+  return "@exhibit(" + title + " #" + id.slice(id.lastIndexOf("-") + 1) + at + ")";
 }
 const QUOTE_LIMIT = 1000;
-function quoteFor(id, title, text) {
+function quoteFor(id, title, text, where) {
   // One "> " line per line of the selection; table cells (tab-separated) are joined with " | ".
   let lines = text.replace(/\\r\\n?/g, "\\n").split("\\n")
     .map((line) => line.replace(/\\t+/g, " | ").replace(/\\s+/g, " ").trim()).filter(Boolean);
@@ -901,7 +931,7 @@ function quoteFor(id, title, text) {
   }
   const quoted = kept.map((line) => "> " + line);
   if (cut) quoted.push("> [quote shortened: " + cut.toLocaleString("en-US") + " more characters]");
-  return referenceFor(id, title) + "\\n" + quoted.join("\\n") + "\\n\\n";
+  return referenceFor(id, title, where) + "\\n" + quoted.join("\\n") + "\\n\\n";
 }
 let toastTimer = 0;
 function toast(text) {
@@ -1245,10 +1275,11 @@ def _undo_version(exhibit_id: str, version: int, meta_before: bytes | None) -> N
         if meta_before is None:
             shutil.rmtree(folder, ignore_errors=True)
             return
-        try:
-            (folder / f"v{version}.html").unlink()
-        except FileNotFoundError:
-            pass
+        for name in (f"v{version}.html", f"outline-v{version}.json"):  # the next version reuses the number
+            try:
+                (folder / name).unlink()
+            except FileNotFoundError:
+                pass
         _atomic_write_bytes(folder / "meta.json", meta_before)
 
 
@@ -1264,6 +1295,71 @@ def _list_exhibits() -> list[dict[str, Any]]:
             exhibits.append(meta)
     exhibits.sort(key=lambda m: m.get("created", ""), reverse=True)  # newest first
     return exhibits
+
+
+_MAX_EDITS = 50
+
+
+def _snippet(text: str, at: int, width: int = 160) -> str:
+    start = max(0, at - width // 2)
+    return text[start:start + width].replace("\n", "\\n")
+
+
+def _apply_edits(page: str, edits: Any) -> str:
+    """Small changes to a stored page, as the str_replace of Anthropic's text editor tool and the
+    old_str/new_str updates of Claude's artifacts: each edit's old text must occur exactly once in the page
+    as the earlier edits left it, and is replaced by its new text. A miss names the edit and the nearest text,
+    and nothing is saved. Runs of whitespace may differ (indentation is where copies drift most)."""
+    if isinstance(edits, str):  # some models send a list as a JSON string (as with delete's exhibit_ids)
+        try:
+            edits = json.loads(edits)
+        except ValueError:
+            pass
+    if isinstance(edits, dict):  # a single edit
+        edits = [edits]
+    if not isinstance(edits, list) or not edits or len(edits) > _MAX_EDITS:
+        raise _ToolFailure("invalid_input", f"edits must be a list of 1 to {_MAX_EDITS} {{\"old\", \"new\"}} objects.")
+    for n, edit in enumerate(edits, 1):
+        old = edit.get("old") if isinstance(edit, dict) else None
+        new = edit.get("new") if isinstance(edit, dict) else None
+        if not isinstance(old, str) or not old.strip() or not isinstance(new, str):
+            raise _ToolFailure("invalid_input", f"Edit {n} needs \"old\" (text copied from the page) and \"new\" "
+                               "(its replacement, \"\" to remove it), both strings. Nothing was saved.")
+        count = page.count(old)
+        span = None
+        if count == 1:
+            at = page.index(old)
+            span = (at, at + len(old))
+        elif count == 0:
+            loose = re.compile(r"\s+".join(re.escape(part) for part in old.split()))
+            found = list(loose.finditer(page))
+            if len(found) == 1:
+                span = found[0].span()
+            count = len(found)
+        if span is None:
+            if count > 1:
+                raise _ToolFailure(
+                    "edit_not_unique",
+                    f"Nothing was saved: edit {n}'s old text occurs {count} times in the page. Make it longer, "
+                    "with the text around it, so it matches once (one edit per place).")
+            # The longest start of the old text that the page has, to show where it drifted. A start that
+            # matches means every shorter one does, so it's a binary search (a few searches, not one per word).
+            words, hint = old.split(), ""
+            first = lambda size: re.search(r"\s+".join(re.escape(w) for w in words[:size]), page)
+            lo, hi = 0, len(words) - 1  # lo: the longest start known to match (0: none)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if first(mid): lo = mid
+                else: hi = mid - 1
+            if lo:
+                hint = f" The page has its first {lo} words; there it reads: \"{_snippet(page, first(lo).start())}\"."
+            raise _ToolFailure(
+                "edit_not_found",
+                f"Nothing was saved: edit {n}'s old text isn't in the latest version of the page "
+                f"(\"{_snippet(old, 0, 120)}\").{hint} Copy old exactly from the page (read with include_html "
+                "shows it) and call show again with all the edits.")
+        page = page[:span[0]] + new + page[span[1]:]
+    return page
 
 
 def _exhibit_html(exhibit_id: str, version: int | None) -> tuple[str, int]:
@@ -1603,14 +1699,18 @@ class _Handler(BaseHTTPRequestHandler):
                 thumbnail = query.get("thumb", [""])[0] == "1"
                 check = query.get("check", [""])[0] == "1"  # show's render check (_render_check)
                 view = query.get("view", [""])[0]  # a freeform page in the viewer's Slides or Document view
+                outline = query.get("outline", [""])[0]  # laid out in a view to read its slides or pages (_outline)
+                if outline in ("slides", "document"):
+                    view, check, thumbnail = outline, False, False
                 if view in ("slides", "document") and not thumbnail and not check and _page_kind(page) == "":
                     page = _insert_in_head(page, _mold_scripts(view, view=True))
                 # A version's file is written once and never changes (an edit adds a new version with
                 # a new address), so the browser can keep it: pages and thumbnails only fetch and
                 # re-run an exhibit again after it's edited. The address also carries the build (?b=),
                 # so a plugin update that changes the injected scripts gets fresh copies.
-                self._send(200, _inject_bridge(page, thumbnail, check, parts[1]), "text/html; charset=utf-8", self._page_csp(),
-                           cache="no-store" if check else "private, max-age=31536000, immutable")
+                self._send(200, _inject_bridge(page, thumbnail, check, parts[1], bool(outline in ("slides", "document"))),
+                           "text/html; charset=utf-8", self._page_csp(),
+                           cache="no-store" if check or outline else "private, max-age=31536000, immutable")
             elif len(parts) == 3 and parts[0] == "api" and parts[2] == "export":
                 if self._cross_site():
                     self._json(403, {"error": "Cross-site request refused."})
@@ -2101,12 +2201,13 @@ document.getElementById("export").addEventListener("click", (e) => {{
 document.getElementById("copy-ref").addEventListener("click", () => copyReference(config.current, savedTitle));
 // Quote: when the user selects text in the exhibit, offer a Quote button next to it.
 const quoteButton = document.getElementById("quote-btn");
-let quoteText = "";
+let quoteText = "", quoteWhere = null;
 window.addEventListener("message", (event) => {{
   if (event.source !== frame.contentWindow) return;
   const m = event.data;
   if (!m || m.channel !== "exhibit-quote") return;
   quoteText = typeof m.text === "string" ? m.text : "";
+  quoteWhere = m.where && typeof m.where === "object" ? m.where : null;
   const box = frame.getBoundingClientRect();
   const visible = quoteText.trim() && m.y > 0 && m.top < box.height;
   quoteButton.hidden = !visible;
@@ -2119,7 +2220,7 @@ window.addEventListener("message", (event) => {{
 }});
 quoteButton.addEventListener("click", () => {{
   quoteButton.hidden = true;
-  copyText(quoteFor(config.current, savedTitle, quoteText), "Quote copied. Paste it into a WorkSwarm chat.");
+  copyText(quoteFor(config.current, savedTitle, quoteText, quoteWhere), "Quote copied. Paste it into a WorkSwarm chat.");
 }});
 window.addEventListener("resize", () => {{ quoteButton.hidden = true; }});
 // Version menu.
@@ -2417,6 +2518,23 @@ _CALM_SCRIPT = """<script>(() => {
 
 # Tells the viewer what the user selected and where, so it can offer a Quote button next to it.
 _QUOTE_SCRIPT = """<script>(() => {
+  // Where something is in the Slides or Document view (page awareness, 0.4.2): {kind: "slide" | "page", n}, or
+  // null in the Page view. Quotes and the item rail's references carry it, so "this, on slide 4" reaches the
+  // agent with its place; show and read's slides and pages (_OUTLINE_SCRIPT, outside a viewer) say what is there.
+  window.__exhibitWhere = (el, top) => {
+    if (el && el.nodeType !== 1) el = el.parentElement;
+    if (!el || !el.closest) return null;
+    const index = (sel, found) => [...document.querySelectorAll(sel)].indexOf(found) + 1;
+    const deckPage = el.closest(".exhibit-deck .exhibit-page");
+    if (deckPage) return { kind: "slide", n: index(".exhibit-deck .exhibit-page", deckPage) };
+    const slide = el.closest("section.slide");
+    if (slide) return { kind: "slide", n: index("section.slide", slide) };
+    const sheet = el.closest(".exhibit-page-stage > .sheet");
+    if (!sheet || !document.querySelector(".exhibit-page-card")) return null;
+    const box = sheet.getBoundingClientRect(), scale = box.width / sheet.offsetWidth || 1;
+    const y = typeof top === "number" ? top : el.getBoundingClientRect().top;
+    return { kind: "page", n: Math.max(0, Math.floor((y - box.top) / scale / 1056)) + 1 };
+  };
   if (parent === window) return;
   let shown = false, timer = 0;
   function report() {
@@ -2432,7 +2550,9 @@ _QUOTE_SCRIPT = """<script>(() => {
     const rects = range.getClientRects();
     const end = rects.length ? rects[rects.length - 1] : all;
     shown = true;
-    parent.postMessage({ channel: "exhibit-quote", text, top: all.top, x: end.right, y: end.bottom }, "*");
+    const first = rects.length ? rects[0] : all;
+    parent.postMessage({ channel: "exhibit-quote", text, top: all.top, x: end.right, y: end.bottom,
+      where: window.__exhibitWhere(range.startContainer, first.top) }, "*");
   }
   document.addEventListener("selectionchange", () => { clearTimeout(timer); timer = setTimeout(report, 200); });
   addEventListener("scroll", () => { if (shown) report(); }, { capture: true, passive: true });
@@ -2444,6 +2564,9 @@ _QUOTE_SCRIPT = """<script>(() => {
 # the plugin to any page that calls exhibit.chart( (and to its exports), like the slide navigation.
 # Chosen by the bake-off in notes/chart-bakeoff.md.
 _ECHARTS_URL = "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
+# The colours the chart and diagram kits give a series, a branch or a set, after the page's accent.
+_PALETTE = ["#4f7cff", "#f2994a", "#27ae60", "#eb5757", "#9b51e0", "#2d9cdb", "#d4a017", "#e05fa6", "#16a085", "#8d6e63"]
+
 _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
   const host = window.exhibit || (window.exhibit = {});
   const charts = new Set();
@@ -2452,7 +2575,7 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
   const loadEcharts = () => window.__exhibitLoad("echarts", () => window.echarts)
     .catch(() => { throw new Error("ECharts couldn't be downloaded"); });
   const esc = (v) => String(v).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-  const PALETTE = ["#4f7cff", "#f2994a", "#27ae60", "#eb5757", "#9b51e0", "#2d9cdb", "#d4a017", "#e05fa6", "#16a085", "#8d6e63"];
+  const PALETTE = __PALETTE__;
   const rgb = (color) => {  // any CSS colour -> [r, g, b], via the browser
     const probe = document.createElement("i");
     probe.style.color = color;
@@ -2541,6 +2664,22 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     return root;
   };
   const heatColors = (t) => [mix(t.bg, t.palette[0], 0.06), mix(t.bg, t.palette[0], 0.45), t.palette[0]];
+  // A calendar's layout, shared by its height and its drawing: square day cells as wide as the weeks allow
+  // (10 to 24 px, as GitHub's contribution grid keeps its days square), one block per year, each running from
+  // the first to the last month with data, and the year named beside a block only when there are several.
+  const calendarPlan = (spec, width) => {
+    const days = sliceData(spec).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d.name)));
+    if (!days.length) return null;
+    const years = [...new Set(days.map((d) => d.name.slice(0, 4)))].sort();
+    const dates = days.map((d) => d.name).sort(), first = dates[0].slice(0, 7) + "-01", last = dates[dates.length - 1];
+    const end = (() => { const d = new Date(last.slice(0, 7) + "-01T00:00:00Z"); d.setUTCMonth(d.getUTCMonth() + 1); d.setUTCDate(0); return d.toISOString().slice(0, 10); })();
+    const range = (y) => [y + "-01-01" < first ? first : y + "-01-01", y + "-12-31" > end ? end : y + "-12-31"];
+    const weeks = Math.max(...years.map((y) => { const [a, b] = range(y); return Math.ceil(((Date.parse(b) - Date.parse(a)) / 864e5 + 7) / 7) + 1; }));
+    const left = years.length > 1 ? 56 : 30, right = 8;
+    const cell = Math.max(10, Math.min(24, Math.floor((width - left - right) / weeks)));
+    // Centred when the days don't fill the width (their labels stay on the left of the grid).
+    return { days, years, range, cell, left: Math.max(left, Math.floor((width - weeks * cell) / 2)), block: 7 * cell + 26 };
+  };
   // Charts whose rows run down the page get as tall as their rows need (the given height is a minimum).
   const heightFor = (spec, el) => {
     const type = spec.type || "line", title = spec.title ? 52 : 0;
@@ -2556,8 +2695,8 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     if (type === "heatmap") return n * 32 + title + 90;
     if (type === "boxplot" && lying({ type: "bar", x: seriesOf(spec).map((s) => s.name), horizontal: spec.horizontal }, el)) return n * 48 + title + 60;
     if (type === "calendar") {
-      const years = new Set(sliceData(spec).map((d) => String(d.name).slice(0, 4)));
-      return years.size * 150 + title + 60;
+      const plan = calendarPlan(spec, el.clientWidth || 640);
+      return plan ? title + 24 + plan.years.length * (plan.block + 12) + 44 : 0;
     }
     if (type === "sankey") return Math.max(360, new Set(sliceData(spec).flatMap((d) => { const l = linkOf(d.name); return l ? [l.source, l.target] : []; })).size * 26);
     return 0;
@@ -2624,11 +2763,22 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
       }[type]);
       if (type === "funnel") {
         base.color = colorsFor(spec, t, pairs.map((d) => d.name));
+        // Each stage shows its count and, as Plotly's and Amplitude's funnels do, how many of the stage before
+        // made it (the drop-off is a funnel's point). A label goes beside its stage, with a leader line, when
+        // the stage is too narrow for it (ECharts would spill white text over the page).
+        const most = Math.max(...pairs.map((d) => Number(d.value) || 0)) || 1;
+        const lines = (d, i) => [d.name, number(d.value, spec) + (i && Number(pairs[i - 1].value) > 0
+          ? "  ·  " + Math.round(d.value / pairs[i - 1].value * 100) + "% of previous" : "")];
+        const narrowAt = (share) => pairs.map((d, i) => Math.max(0.08, (Number(d.value) || 0) / most) * (el.clientWidth || 640) * share - 24 < Math.max(...lines(d, i).map(textWidth)));
+        // Labels beside the funnel need room on its right: it narrows (and moves left) when any has one.
+        const beside = narrowAt(0.84).some(Boolean), share = beside ? 0.6 : 0.84, narrow = narrowAt(share);
+        const data = pairs.map((d, i) => ({ ...d, label: narrow[i] ? { position: "right", color: t.fg } : { position: "inside", color: "#fff" },
+          labelLine: { show: narrow[i], lineStyle: { color: t.line } } }));
         return {
           ...base,
           tooltip: { ...tip, trigger: "item", formatter: (p) => p.marker + esc(p.name) + "<br><b>" + fmt(p.value) + "</b>" + (p.dataIndex ? " &nbsp;" + Math.round(p.value / pairs[0].value * 100) + "% of the first" : "") },
-          series: [{ type: "funnel", data: pairs, sort: "none", top: top + 8, bottom: 8, left: "8%", width: "84%", minSize: "8%", gap: 3,
-            label: { show: true, position: "inside", color: "#fff", formatter: (p) => p.name + "  " + number(p.value, spec, true) },
+          series: [{ type: "funnel", data, sort: "none", top: top + 8, bottom: 8, left: beside ? "4%" : "8%", width: share * 100 + "%", minSize: "8%", gap: 3,
+            label: { show: true, lineHeight: 17, formatter: (p) => lines(p.data, p.dataIndex).join("\n") },
             itemStyle: { borderColor: t.bg, borderWidth: 1 } }],
         };
       }
@@ -2641,11 +2791,18 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
         tree.forEach((n, i) => paint(n, colors[i % colors.length], 0, 0));
         const total = pairs.reduce((s, d) => s + (Number(d.value) || 0), 0);
         const tooltip = { ...tip, trigger: "item", formatter: (p) => { const v = Number(p.value) || 0; return esc((p.treePathInfo || []).slice(1).map((x) => x.name).join(" / ") || p.name) + "<br><b>" + fmt(v) + "</b>" + (total ? " &nbsp;" + (v / total * 100).toFixed(1) + "%" : ""); } };
+        // Clicking into a group (with ECharts' path bar to come back) only when there are too many boxes to
+        // read at once; otherwise the bar just echoes the hovered box's path under the chart.
+        const leaves = pairs.length, zooms = tree.some((n) => n.children) && leaves > 40;
+        const sum = pairs.reduce((s, d) => s + Math.max(0, Number(d.value) || 0), 0) || 1;
+        const smallText = (node) => { if (node.children) node.children.forEach(smallText); else if ((Number(node.value) || 0) / sum < 0.04) node.label = { fontSize: 11 }; };
+        if (type === "treemap") tree.forEach(smallText);
         if (type === "treemap") return {
           ...base, tooltip,
-          series: [{ type: "treemap", data: tree, top: top + 8, left: 2, right: 2, bottom: tree.some((n) => n.children) ? 30 : 2, roam: false, nodeClick: "zoomToNode",
-            breadcrumb: { show: tree.some((n) => n.children), bottom: 2, itemStyle: { color: t.card, borderColor: t.line, textStyle: { color: t.fg } } },
-            label: { show: true, color: "#fff", formatter: (p) => p.name + "\n" + number(p.value, spec, true), overflow: "truncate" },
+          series: [{ type: "treemap", data: tree, top: top + 8, left: 2, right: 2, bottom: zooms ? 30 : 2, roam: false, nodeClick: zooms ? "zoomToNode" : false,
+            breadcrumb: { show: zooms, bottom: 2, itemStyle: { color: t.card, borderColor: t.line, textStyle: { color: t.fg } } },
+            // Small boxes get smaller text before their names are cut short.
+            label: { show: true, color: "#fff", fontSize: 12, formatter: (p) => p.name + "\n" + number(p.value, spec, true), overflow: "truncate" },
             itemStyle: { borderColor: t.bg, borderWidth: 2, gapWidth: 2 },
             // levels[0] is the hidden root; groups (level 1) get their name in a strip along the top.
             levels: [{ itemStyle: { borderColor: t.bg, borderWidth: 0, gapWidth: 3 } },
@@ -2671,21 +2828,20 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
         };
       }
       // calendar
-      const days = pairs.filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d.name)));
-      if (!days.length) throw new Error('A calendar needs dates written YYYY-MM-DD, e.g. {"2026-03-01": 4}');
-      const years = [...new Set(days.map((d) => d.name.slice(0, 4)))].sort(), vals = nums(days.map((d) => d.value));
-      const dates = days.map((d) => d.name).sort(), first = dates[0].slice(0, 7) + "-01", last = dates[dates.length - 1];
-      const end = (() => { const d = new Date(last.slice(0, 7) + "-01T00:00:00Z"); d.setUTCMonth(d.getUTCMonth() + 1); d.setUTCDate(0); return d.toISOString().slice(0, 10); })();
-      // Each year runs from the first to the last month with data, so a few months don't sit in an empty year.
-      const range = (y) => [y + "-01-01" < first ? first : y + "-01-01", y + "-12-31" > end ? end : y + "-12-31"];
-      const lo = Math.min(0, ...vals), hi = Math.max(...vals);
+      const plan = calendarPlan(spec, el.clientWidth || 640);
+      if (!plan) throw new Error('A calendar needs dates written YYYY-MM-DD, e.g. {"2026-03-01": 4}');
+      const { days, years, range, cell, block } = plan, vals = nums(days.map((d) => d.value));
+      const lo = Math.min(0, ...vals), hi = Math.max(...vals), at = (k) => top + 24 + k * (block + 12);
       return {
         ...base,
         tooltip: { ...tip, trigger: "item", formatter: (p) => esc(p.value[0]) + "<br><b>" + fmt(p.value[1]) + "</b>" },
-        visualMap: { min: lo, max: hi, orient: "horizontal", left: "center", bottom: 0, itemHeight: 120, calculable: false, text: [number(hi, spec, true), number(lo, spec, true)], inRange: { color: heatColors(t) }, textStyle: { color: t.muted } },
-        calendar: years.map((y, k) => ({ range: range(y), top: top + 24 + k * 150, left: 34, right: 8, cellSize: ["auto", 15],
+        // The colour key sits right under the last year, named by the value it shows.
+        visualMap: { min: lo, max: hi, orient: "horizontal", left: "center", top: at(years.length) - 8, itemHeight: 120, itemWidth: 12, calculable: false,
+          text: [number(hi, spec, true), number(lo, spec, true) + (spec.yLabel ? "  " + spec.yLabel : "")], inRange: { color: heatColors(t) }, textStyle: { color: t.muted } },
+        calendar: years.map((y, k) => ({ range: range(y), top: at(k), left: plan.left, cellSize: cell,
           itemStyle: { color: mix(t.bg, t.fg, 0.04), borderColor: t.bg, borderWidth: 2 }, splitLine: { show: false },
-          dayLabel: { color: t.muted, firstDay: 1, nameMap: ["S", "M", "T", "W", "T", "F", "S"] }, monthLabel: { color: t.muted }, yearLabel: { color: t.muted } })),
+          dayLabel: { color: t.muted, firstDay: 1, nameMap: ["S", "M", "T", "W", "T", "F", "S"] }, monthLabel: { color: t.muted },
+          yearLabel: { show: years.length > 1, color: t.muted } })),
         series: years.map((y, k) => ({ type: "heatmap", coordinateSystem: "calendar", calendarIndex: k, data: days.filter((d) => d.name.startsWith(y)).map((d) => [d.name, d.value]) })),
       };
     }
@@ -2717,11 +2873,17 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
       const top3 = (i) => Math.max(...series.map((s) => Number(s.data[i]) || 0));
       // The web sits in the space under the title and legend, with room for the axis names around it.
       const h = el.clientHeight || 360, w = el.clientWidth || 640, above = top + (series.length > 1 ? 28 : 8) + 18;
-      const room = Math.max(60, Math.min(h - above - 22, w * 0.7) / 2);
+      // The axis names sit about 30 px outside the web: room for the one at the bottom too.
+      const room = Math.max(60, (Math.min(h - above - 36, w * 0.7)) / 2);
+      // With one scale for every axis (max), the rings are labelled up the top axis, as Excel's radar charts
+      // are; with a scale per axis, a single set of ring values would be wrong, so they're left to the tooltip.
+      const rings = 5, shared = spec.max !== undefined;
+      const scale = shared ? Array.from({ length: rings }, (_, k) => ({ type: "text", silent: true, left: (w / 2) + 4, top: above + room - room * (k + 1) / rings - 6,
+        style: { text: number(spec.max * (k + 1) / rings, spec, true), fill: t.muted, font: "10px " + t.font } })) : [];
       return {
-        ...base, legend: legend(series.length > 1),
+        ...base, legend: legend(series.length > 1), graphic: scale,
         tooltip: { ...tip, trigger: "item", formatter: (p) => p.marker + esc(p.name) + "<br>" + x.map((name, i) => esc(name) + ": <b>" + fmt(p.value[i]) + "</b>").join("<br>") },
-        radar: { indicator: x.map((name, i) => ({ name, max: spec.max !== undefined ? spec.max : (top3(i) || 1) * 1.1 })), center: ["50%", above + room], radius: room,
+        radar: { indicator: x.map((name, i) => ({ name, max: shared ? spec.max : (top3(i) || 1) * 1.1 })), center: ["50%", above + room], radius: room, splitNumber: rings,
           axisName: { color: t.fg }, splitLine: { lineStyle: { color: t.line } }, splitArea: { show: false }, axisLine: { lineStyle: { color: t.line } } },
         series: [{ type: "radar", symbolSize: 5, data: series.map((s) => ({ name: s.name, value: s.data.map((v) => (v === null || v === undefined ? 0 : v)), areaStyle: { opacity: 0.12 }, lineStyle: { width: 2 } })),
           emphasis: { focus: "series" } }],
@@ -2744,24 +2906,39 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
         ],
       };
     }
-    // waterfall: each value is a change; the last bar is the running total unless total: false
+    // waterfall: each value is a change; the last bar is the running total unless total: false. With
+    // start: true the first value is where it starts (a total bar, like the end). As waterfalls are drawn in
+    // Excel and think-cell: every bar shows its value (changes signed, totals plain), and a dashed connector
+    // carries each running total across to the next bar, so the bars read as steps from start to end.
     const changes = series[0].data.map((v) => Number(v) || 0), labels = [...x], steps = [];
     let run = 0;
-    changes.forEach((c, i) => { steps.push([i, run, run + c, c, 0]); run += c; });  // 5 values each: the 5th marks the total
+    changes.forEach((c, i) => {  // 5 values each: x, from, to, the change, and 1 for a total bar
+      steps.push(i === 0 && spec.start ? [i, 0, c, c, 1] : [i, run, run + c, c, 0]); run += c;
+    });
     if (spec.total !== false) { labels.push(spec.totalLabel || "Total"); steps.push([steps.length, 0, run, run, 1]); }
     const up = spec.colors && spec.colors.up || "#27ae60", down = spec.colors && spec.colors.down || "#eb5757", sum = spec.colors && spec.colors.total || t.palette[0];
+    const signed = (v, total) => (total ? "" : v > 0 ? "+" : v < 0 ? "−" : "") + number(total ? v : Math.abs(v), spec);
     return {
       ...base,
       tooltip: { ...tip, trigger: "item", formatter: (p) => "<b>" + esc(labels[p.value[0]]) + "</b><br>" + (p.value[4] ? "Total: <b>" + fmt(p.value[3]) + "</b>" : (p.value[3] >= 0 ? "+" : "") + fmt(p.value[3]) + " &nbsp;→ " + fmt(p.value[2])) },
-      grid: { left: 4, right: 18, top: top + 8, bottom: 4, containLabel: true },
+      grid: { left: 4, right: 18, top: top + 26, bottom: 4, containLabel: true },
       xAxis: category(labels, { axisLabel: { color: t.muted, interval: 0, overflow: "break", width: Math.max(50, (el.clientWidth || 640) * 0.9 / labels.length) } }),
       yAxis: value({ name: spec.yLabel }),
-      series: [{ type: "custom", data: steps, encode: { x: 0, y: [1, 2] },
+      series: [{ type: "custom", data: steps, encode: { x: 0, y: [1, 2] }, clip: false,
         renderItem: (params, api) => {
-          const lo = api.coord([api.value(0), Math.min(api.value(1), api.value(2))]), hi = api.coord([api.value(0), Math.max(api.value(1), api.value(2))]);
-          const w = api.size([1, 0])[0] * 0.62, total = api.value(4) === 1;
-          return { type: "rect", shape: { x: lo[0] - w / 2, y: hi[1], width: w, height: Math.max(1, lo[1] - hi[1]), r: 3 },
-            style: { fill: total ? sum : api.value(3) >= 0 ? up : down } };
+          const i = api.value(0), from = api.value(1), to = api.value(2), change = api.value(3), total = api.value(4) === 1;
+          const lo = api.coord([i, Math.min(from, to)]), hi = api.coord([i, Math.max(from, to)]);
+          const band = api.size([1, 0])[0], w = band * 0.62, falls = !total && change < 0;
+          const children = [{ type: "rect", shape: { x: lo[0] - w / 2, y: hi[1], width: w, height: Math.max(1, lo[1] - hi[1]), r: 3 },
+            style: { fill: total ? sum : change >= 0 ? up : down } }];
+          if (w >= 22) children.push({ type: "text", silent: true, style: { text: signed(change, total), x: lo[0], y: falls ? lo[1] + 4 : hi[1] - 4,
+            align: "center", verticalAlign: falls ? "top" : "bottom", fill: t.fg, font: (total ? "600 " : "") + "12px " + t.font } });
+          if (i < steps.length - 1) {  // the running total after this bar, across to the next one
+            const y = api.coord([i, to])[1];
+            children.push({ type: "line", silent: true, shape: { x1: lo[0] + w / 2, y1: y, x2: lo[0] + band - w / 2, y2: y },
+              style: { stroke: t.muted, lineWidth: 1, lineDash: [3, 3] } });
+          }
+          return { type: "group", children };
         } }],
     };
   };
@@ -2926,7 +3103,14 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     else if (bottom !== null) grid.bottom = Math.max(px(grid.bottom) || 0, bottom + 30);
     return option;
   };
-  const merge = (a, b) => {  // the escape hatch: spec.options merged over the kit's settings
+  // The escape hatch: spec.options merged over the kit's settings. A list of settings objects (series,
+  // xAxis, yAxis...) is merged item by item, by position, as ECharts' own setOption merges components: a page's
+  // options: {series: [{areaStyle: {}}]} used to replace the kit's series, data and all, and drew an empty
+  // chart (Café sales, 2026-11-18). Other lists (colours, data) replace the kit's.
+  const plain = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  const merge = (a, b) => {
+    if (Array.isArray(b) && Array.isArray(a) && b.length && b.every(plain))
+      return [...b.map((item, i) => merge(a[i], item)), ...a.slice(b.length)];
     if (Array.isArray(b) || typeof b !== "object" || b === null) return b;
     const out = { ...(a && typeof a === "object" && !Array.isArray(a) ? a : {}) };
     for (const [k, v] of Object.entries(b)) out[k] = merge(out[k], v);
@@ -3108,7 +3292,12 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
       let option;
       try { option = build(spec, theme(el), el); } catch (err) { message(el, "Chart error: " + err.message); console.error("exhibit.chart:", err); return null; }
       const inst = echarts.init(el, null, { renderer: "svg" });
-      inst.setOption(settle(spec.options ? merge(option, spec.options) : option));
+      const merged = spec.options ? merge(option, spec.options) : option;
+      // options that leave a chart with no data draw an empty frame: say so, for show's render check.
+      const filled = (o) => [].concat(o.series || []).some((s) => s && (s.data || s.links || s.type === "custom"));
+      if (spec.options && filled(option) && !filled(merged))
+        console.error("exhibit.chart: its options replaced the chart's data, so it draws nothing (" + (spec.title || el.id || "a chart") + "). Leave series data to the kit.");
+      inst.setOption(settle(merged));
       const entry = { el, spec, inst, index };
       entry.draw = () => inst.setOption(settle(merge(build(entry.spec, theme(el), el), entry.spec.options || {})), true);
       charts.add(entry);
@@ -3143,7 +3332,7 @@ _CHART_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
   try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redraw); } catch (e) {}
   addEventListener("beforeprint", () => charts.forEach((c) => c.inst.resize()));
   addEventListener("afterprint", () => charts.forEach((c) => c.inst.resize()));
-})();""" + "</script>"
+})();""".replace("__PALETTE__", json.dumps(_PALETTE)) + "</script>"
 
 
 def _uses_chart_kit(page: str) -> bool:
@@ -3235,7 +3424,7 @@ def _page_version() -> str:
 
 def _diagram_kit_script() -> str:
     look = _diagram_look()
-    return _DIAGRAM_KIT_SCRIPT.replace("__LOOK__", look).replace("__LAYOUT__", "elk" if look == "neo" else "dagre")
+    return _DIAGRAM_KIT_SCRIPT.replace("__PALETTE__", json.dumps(_PALETTE)).replace("__LOOK__", look).replace("__LAYOUT__", "elk" if look == "neo" else "dagre")
 
 
 # The diagram kit (0.4.0): every <pre class="exhibit-diagram"> holds Mermaid text, which is drawn with
@@ -3253,7 +3442,7 @@ def _diagram_kit_script() -> str:
 # classes and ids); links are matched to the parts at their two ends by position; anything unknown
 # falls back to "each group with a shape and a label". Checked on all 35 types (notes/mermaid-map.md).
 _DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
-  const LOOK = "__LOOK__", LAYOUT = "__LAYOUT__";
+  const LOOK = "__LOOK__", LAYOUT = "__LAYOUT__", DIAGRAM_PALETTE = __PALETTE__;
   const host = window.exhibit || (window.exhibit = {});
   const PARTS = ".ex-part";  // every element the kit recognised as a part, link or group (marked when the model is built)
   // The Mermaid text is never shown, whatever the page's own CSS gives its block (Kit round 2: a
@@ -3332,14 +3521,59 @@ _DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     const accent = hex(v("--accent") || (dark ? "#8ab0ff" : "#2b59c3"));
     const soft = hex(v("--accent-soft") || (dark ? "#1e2a45" : "#eaf0fc"));
     const card = hex(v("--card") || v("--paper") || bg);
+    // Colour sets: Mermaid derives every multi-colour type (mind map branches, timeline and journey sections,
+    // gitGraph branches, Venn sets, pie slices) from primary, secondary and tertiary by turning the hue, so
+    // with a white secondary and tertiary half of them came out white or grey. They get the chart kit's
+    // palette instead (the page's accent first), as tints with the page's text colour on them.
+    const mix = (a, b, k) => { const p = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+      const x = p(a), y = p(b); return "#" + x.map((xi, i) => Math.round(xi + (y[i] - xi) * k).toString(16).padStart(2, "0")).join(""); };
+    const near = (a, b) => { const x = parseInt(a.slice(1), 16), y = parseInt(b.slice(1), 16);
+      return Math.hypot((x >> 16) - (y >> 16), ((x >> 8) & 255) - ((y >> 8) & 255), (x & 255) - (y & 255)) < 90; };
+    const palette = [accent, ...DIAGRAM_PALETTE.filter((c) => !near(c, accent))];
+    const tint = (c) => mix(bg, c, dark ? 0.3 : 0.22), solid = (c) => (dark ? mix(c, "#ffffff", 0.15) : c);
+    const sets = {};
+    for (let i = 0; i < 12; i++) {
+      const c = palette[i % palette.length];
+      Object.assign(sets, { ["cScale" + i]: tint(c), ["cScaleLabel" + i]: fg, ["cScaleInv" + i]: solid(c), ["cScalePeer" + i]: solid(c),
+                            ["pie" + (i + 1)]: solid(c) });
+      if (i < 8) Object.assign(sets, { ["git" + i]: solid(c), ["gitInv" + i]: bg, ["gitBranchLabel" + i]: dark ? bg : "#ffffff",
+                                       ["venn" + (i + 1)]: solid(c), ["fillType" + i]: tint(c) });
+    }
+    // What the theme variables don't reach: mind map and timeline boxes take the plain node colour whatever
+    // their branch or period (those colours are only read in Mermaid's redux-color theme), journey actor dots are drawn
+    // in colours fixed when Mermaid loads, and Venn labels are 24 px whatever their room, so the names of
+    // overlaps ran into each other. Mermaid scopes these rules to the diagram.
+    // A mind map's branch n and a timeline's period n + 1 are section n, drawn in colour n + 1 (their lines are
+    // cScale n + 1; the root and the first period are section -1, colour 0).
+    // C4 draws relations and boundary labels in a fixed dark grey, unreadable on a dark page.
+    // Venn labels: Mermaid sizes them all at 48/1600 of the diagram's width; sets keep 5/6 of that and the
+    // overlaps' names 5/8, so they fit their region.
+    const vennWidth = (((window.mermaid || {}).mermaidAPI || {}).defaultConfig || {}).venn?.width || 800;
+    let css = ".venn-circle text{font-size:" + Math.round(vennWidth * 0.025) + "px!important}"
+      + ".venn-intersection text{font-size:" + Math.round(vennWidth * 0.01875) + "px!important}"
+      + "[fill='#444444']{fill:" + muted + "}[stroke='#444444']{stroke:" + muted + "}";
+    palette.slice(0, 12).forEach((c, i) => {
+      const s = "g[data-look].section-" + (i - 1);
+      css += s + " rect," + s + " circle," + s + " path," + s + " polygon{fill:" + tint(c) + "!important;stroke:" + solid(c) + "!important}";
+      css += "circle.actor-" + i + "{fill:" + solid(c) + ";stroke:" + bg + "}";
+    });
     return {
-      accent, vars: {
+      accent, css, palette: palette.map(solid), tints: palette.map(tint), fg, muted, bg, vars: {
         darkMode: dark, background: bg, fontFamily: body.fontFamily, fontSize: "14px",
         primaryColor: soft, primaryTextColor: fg, primaryBorderColor: accent, lineColor: muted,
         secondaryColor: card, tertiaryColor: card, textColor: fg, noteBkgColor: card, noteTextColor: fg,
         noteBorderColor: line, actorBkg: soft, actorBorder: accent, actorTextColor: fg, signalColor: fg,
         signalTextColor: fg, labelBoxBkgColor: card, labelBoxBorderColor: line, labelTextColor: fg,
         clusterBkg: card, clusterBorder: line, edgeLabelBackground: bg, titleColor: fg,
+        // The neo look draws borders as a gradient from primaryBorderColor to secondaryBorderColor, which
+        // came from the white secondary colour, so borders faded out along the box.
+        secondaryBorderColor: accent, tertiaryBorderColor: line,
+        ...sets, gitBranchLabel0: dark ? bg : "#ffffff", commitLabelColor: fg, commitLabelBackground: card, commitLabelFontSize: "12px",
+        // Gantt rows: Mermaid's alternate row colour was a light grey band on a dark page.
+        sectionBkgColor: mix(bg, fg, 0.04), altSectionBkgColor: bg, sectionBkgColor2: mix(bg, fg, 0.04),
+        tagLabelColor: fg, tagLabelBackground: soft, tagLabelBorder: accent, tagLabelFontSize: "12px",
+        vennTitleTextColor: fg, vennSetTextColor: fg, pieStrokeColor: bg, pieOuterStrokeColor: line, pieOpacity: "1",
+        pieTitleTextColor: fg, pieSectionTextColor: fg, pieLegendTextColor: fg,
       },
     };
   };
@@ -3885,6 +4119,7 @@ _DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
       box.setAttribute("aria-label", pre.dataset.name || pre.getAttribute("title") || "Diagram " + (i + 1));
       wrap.appendChild(box);
       pre.after(wrap);
+      pre.exhibitWrap = wrap;  // the Slides view moves the drawing onto a slide and leaves the hidden source behind
       const source = sourceOf(pre);
       const d = { pre, wrap, box, source, extras: extrasOf(source), listeners: {}, step: 0 };
       d.ready = new Promise((resolve) => { d.resolveReady = resolve; });
@@ -3907,7 +4142,15 @@ _DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     mermaid.initialize({
       startOnLoad: false, securityLevel: "strict", suppressErrorRendering: true, deterministicIds: true,
       // Mermaid 12 already lays out with ELK where it can; forcing it breaks mind maps, so neo leaves it unset.
-      theme: "base", look: LOOK, ...(LAYOUT === "elk" ? {} : { layout: LAYOUT }), themeVariables: t.vars, fontFamily: t.vars.fontFamily,
+      theme: "base", look: LOOK, ...(LAYOUT === "elk" ? {} : { layout: LAYOUT }), themeVariables: t.vars, fontFamily: t.vars.fontFamily, themeCSS: t.css,
+      // The tree view takes its colours from its own settings, not the theme (Mermaid's are black, so a
+      // dark page drew black lines and labels).
+      treeView: { labelColor: t.fg, lineColor: t.muted, iconColor: t.muted, descriptionColor: t.muted },
+      // C4 names its own fonts ("Open Sans", which falls back to bold Arial), not the page's.
+      c4: Object.fromEntries(Object.keys(((mermaid.mermaidAPI || {}).defaultConfig || {}).c4 || {})
+        .filter((k) => /FontFamily$/.test(k)).map((k) => [k, t.vars.fontFamily])),
+      // Blocks are drawn touching, so an arrow between two neighbours had no room to show.
+      block: { padding: 24 },
       // A diagram's own settings can't change the look, so every exhibit stays the same.
       secure: ["secure", "securityLevel", "startOnLoad", "maxTextSize", "suppressErrorRendering", "maxEdges",
                "theme", "themeVariables", "themeCSS", "look", "layout", "fontFamily", "darkMode"],
@@ -3915,25 +4158,65 @@ _DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
     list.forEach((d) => d.wrap.style.setProperty("--ex-accent", t.accent));
     return mermaid;
   };
+  // Mermaid measures labels in a scratch element, by default at the end of <body>. The Slides view hides
+  // everything in <body> but its deck, so labels measured 0 and redrawn diagrams came out empty: measure
+  // inside the diagram's own wrap instead (mermaid.render's svgContainingElement).
+  const drawIn = async (d, mermaid, id, source) => {
+    const scratch = document.createElement("div");
+    scratch.style.cssText = "position:absolute;left:0;top:0;width:100%;visibility:hidden;pointer-events:none";
+    d.wrap.appendChild(scratch);
+    try { return await mermaid.render(id, source, scratch); } finally { scratch.remove(); }
+  };
+  // After drawing: empty space around the drawing is cut off (a C4 diagram kept 150 px for a title it didn't
+  // have; a Venn diagram is a fixed 800 × 450 whatever its circles), keeping the drawing's scale, and a title
+  // written in quotes loses them (some types keep the quotes: title "Who can do what").
+  const tidy = (svg) => {
+    svg.querySelectorAll("text[class*=title], text[class*=Title]").forEach((t) => {
+      const m = t.textContent.match(/^\s*"(.*)"\s*$/);
+      if (m && !t.children.length) t.textContent = m[1];
+    });
+    const vb = svg.viewBox && svg.viewBox.baseVal;
+    let b = null;
+    try { b = svg.getBBox(); } catch (e) {}
+    if (!vb || !vb.width || !b || !b.width || !b.height) return;  // not on screen yet (a hidden slide)
+    const PAD = 8, x = Math.max(vb.x, b.x - PAD), y = Math.max(vb.y, b.y - PAD);
+    const w = Math.min(vb.x + vb.width, b.x + b.width + PAD) - x, h = Math.min(vb.y + vb.height, b.y + b.height + PAD) - y;
+    if (vb.width - w < 24 && vb.height - h < 24) return;
+    // Positions in % are of the drawing area, so they're turned into numbers first (a Venn title is at x="50%").
+    // Only at the top level: inside a moved or scaled group the number would be in the group's units, so a
+    // drawing with one of those keeps its space.
+    const percent = [...svg.querySelectorAll("[x$='%'], [y$='%']")];
+    const moved = (el) => { for (let n = el.parentElement; n && n !== svg; n = n.parentElement) if (n.getAttribute("transform")) return true; return false; };
+    if (percent.some(moved)) return;
+    percent.forEach((el) => {
+      if (/%$/.test(el.getAttribute("x") || "")) el.setAttribute("x", vb.x + vb.width * parseFloat(el.getAttribute("x")) / 100);
+      if (/%$/.test(el.getAttribute("y") || "")) el.setAttribute("y", vb.y + vb.height * parseFloat(el.getAttribute("y")) / 100);
+    });
+    svg.setAttribute("viewBox", [x, y, w, h].join(" "));
+    if (svg.style.maxWidth) svg.style.maxWidth = w + "px";
+    if (svg.getAttribute("height") && !/%/.test(svg.getAttribute("height"))) svg.setAttribute("height", h);
+    if (svg.getAttribute("width") && !/%/.test(svg.getAttribute("width"))) svg.setAttribute("width", w);
+  };
   const render = async (mermaid, d) => {
     d.model = null; d.pinned = null;
     if (d.detail) { d.detail.remove(); d.detail = null; }
     try {
       d.renderId = "exhibit-diagram-" + (++renders);
-      const { svg } = await mermaid.render(d.renderId, d.source);
+      const { svg } = await drawIn(d, mermaid, d.renderId, d.source);
       d.box.innerHTML = svg;
       d.wrap.dataset.state = "drawn";
       const el = d.box.querySelector("svg");
-      if (el) el.setAttribute("aria-hidden", "true");  // the box carries the name
+      if (el) { el.setAttribute("aria-hidden", "true"); tidy(el); }  // the box carries the name
       wire(d);
       buildZoom(d);
       buildSteps(d);
+      if (d.fitArgs) window.__exhibitDiagramLayout.fit(d.wrap, ...d.fitArgs);  // a view's size survives a redraw (light/dark)
       // A diagram that isn't on screen yet (a later slide) can't be measured: finish when it shows.
       if (!modelOf(d) && window.IntersectionObserver) {
         const watch = new IntersectionObserver((entries) => {
           if (!entries.some((e) => e.isIntersecting) || !modelOf(d)) return;
           watch.disconnect();
-          buildZoom(d); buildSteps(d);
+          tidy(d.box.querySelector("svg")); buildZoom(d); buildSteps(d);
         });
         watch.observe(d.box);
       }
@@ -3983,6 +4266,100 @@ _DIAGRAM_KIT_SCRIPT = _LIB_LOADER_SCRIPT + "<script>" + r"""(() => {
         return (mermaidReady || Promise.reject(new Error("Mermaid isn't loaded"))).then((m) => render(m, d));
       },
     }));
+  };
+
+  // Views lay a diagram out for their own box (0.4.2): a slide is landscape and short, a document page
+  // portrait and tall, so a diagram that suits the page can be squeezed to unreadable text in another view.
+  // window.__exhibitDiagramLayout, used by the Slides and Document views:
+  //   fit(wrap, width, height, {grow, force}): the drawing at the largest size that fits the box (reveal.js's
+  //     r-stretch), up to MAX_TEXT labels when grow, else at most its natural size. Returns false and changes
+  //     nothing when its text would be under MIN_TEXT, unless force.
+  //   orient(wrap, width, height, {grow}): for types with a direction (flowchart, state, class and ER
+  //     diagrams), redraws it in the other direction when that fits the box at a clearly larger size, as
+  //     Graphviz's ratio and ELK's aspectRatio fit a layout to a page. A promise.
+  const MAX_TEXT = 20;
+  const naturalOf = (svg) => { const vb = svg && svg.viewBox && svg.viewBox.baseVal; return vb && vb.width && vb.height ? [vb.width, vb.height] : null; };
+  const scaleFor = ([w, h], font, width, height, grow) =>
+    Math.min(width / w, height / h, grow ? MAX_TEXT / (font || 14) : 1);
+  const byWrap = (wrap) => (diagrams || []).find((d) => d.wrap === wrap);
+  // The other direction, for the types that have one; null for the rest. Only the diagram's own direction
+  // changes, not a subgraph's or a composite state's.
+  const flipped = (source) => {
+    const lines = source.split("\n");
+    const head = lines.findIndex((l) => l.trim() && !/^\s*%%/.test(l));
+    if (head < 0) return null;
+    const flip = (dir) => (/^(LR|RL)$/i.test(dir) ? "TB" : "LR");
+    const flow = lines[head].match(/^(\s*(?:flowchart|graph))(?:\s+(TB|TD|BT|LR|RL))?(.*)$/i);
+    if (flow) { lines[head] = flow[1] + " " + flip(flow[2] || "TB") + flow[3]; return lines.join("\n"); }
+    if (!/^\s*(stateDiagram(-v2)?|classDiagram(-v2)?|erDiagram)\b/i.test(lines[head])) return null;
+    let depth = 0;
+    for (let i = head + 1; i < lines.length; i++) {
+      const m = depth === 0 && lines[i].match(/^(\s*direction\s+)(TB|TD|BT|LR|RL)\s*$/i);
+      if (m) { lines[i] = m[1] + flip(m[2]); return lines.join("\n"); }
+      depth += (lines[i].match(/\{/g) || []).length - (lines[i].match(/\}/g) || []).length;
+    }
+    lines.splice(head + 1, 0, "  direction LR");  // these types default to top to bottom
+    return lines.join("\n");
+  };
+  window.__exhibitDiagramLayout = {
+    ready: () => Promise.all(collect().map((d) => d.ready)),
+    readable(wrap, width, height, opts = {}) {  // would fit() at this box keep its text readable?
+      const d = byWrap(wrap), svg = d && d.box.querySelector("svg"), size = naturalOf(svg);
+      if (!size) return false;
+      const font = textSize(svg) || 14;
+      return font * scaleFor(size, font, width, height, opts.grow) >= MIN_TEXT;
+    },
+    fit(wrap, width, height, opts = {}) {
+      const d = byWrap(wrap), svg = d && d.box.querySelector("svg"), size = naturalOf(svg);
+      if (!size || width <= 0 || height <= 0) return false;
+      const font = textSize(svg) || 14, scale = scaleFor(size, font, width, height, opts.grow);
+      if (font * scale < MIN_TEXT && !opts.force) return false;
+      d.fitArgs = [width, height, opts];
+      if (d.tools) { d.tools.remove(); d.tools = null; }
+      d.box.classList.remove("zoomed");
+      svg.style.setProperty("width", Math.floor(size[0] * scale) + "px", "important");
+      svg.style.setProperty("height", Math.floor(size[1] * scale) + "px", "important");
+      svg.style.setProperty("max-width", "none", "important");
+      return true;
+    },
+    async orient(wrap, width, height, opts = {}) {
+      const d = byWrap(wrap), svg = d && d.box.querySelector("svg"), size = naturalOf(svg);
+      if (!size || width <= 0 || height <= 0) return false;
+      const other = await flippedSize(d);
+      if (!other) return false;
+      const font = textSize(svg) || 14;
+      // Clearly better only: a flip that barely helps isn't worth a layout the author didn't choose.
+      if (scaleFor(other.size, font, width, height, opts.grow) < scaleFor(size, font, width, height, opts.grow) * 1.15) return false;
+      d.source = other.source;
+      await render(await mermaidReady, d);
+      return true;
+    },
+    // The label size (px) fit() would give the diagram in this box, as drawn now.
+    textAt(wrap, width, height, opts = {}) {
+      const d = byWrap(wrap), svg = d && d.box.querySelector("svg"), size = naturalOf(svg);
+      if (!size || width <= 0 || height <= 0) return 0;
+      const font = textSize(svg) || 14;
+      return font * scaleFor(size, font, width, height, opts.grow);
+    },
+    // The label size (px) the diagram would get in this box, in the better of its two directions; for show's
+    // page check, which warns about diagrams no view can show readably. Changes nothing.
+    async textIn(wrap, width, height, opts = {}) {
+      const d = byWrap(wrap), svg = d && d.box.querySelector("svg"), size = naturalOf(svg);
+      if (!size || width <= 0 || height <= 0) return null;
+      const font = textSize(svg) || 14, other = await flippedSize(d);
+      const best = Math.max(scaleFor(size, font, width, height, opts.grow), other ? scaleFor(other.size, font, width, height, opts.grow) : 0);
+      return Math.round(font * best * 10) / 10;
+    },
+  };
+  // The size the diagram would have drawn the other way (drawn off screen and thrown away), or null.
+  const flippedSize = async (d) => {
+    const other = flipped(d.source);
+    if (!other || !mermaidReady) return null;
+    try {
+      const { svg: text } = await drawIn(d, await mermaidReady, "exhibit-diagram-probe-" + (++renders), other);
+      const [, , w, h] = ((text.match(/viewBox="([^"]+)"/) || [])[1] || "").split(/[\s,]+/).map(Number);
+      return w > 0 && h > 0 ? { source: other, size: [w, h] } : null;
+    } catch (err) { return null; }
   };
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", draw); else draw();
@@ -4466,6 +4843,13 @@ _PDF_TIMEOUT = 90
 _PDF_RENDER_CSP = "; ".join(part for part in _PAGE_CSP.split("; ") if not part.startswith("sandbox "))
 
 
+def _browser_env() -> dict[str, str]:
+    """The environment for the headless browser. Without __COMPAT_LAYER: a Windows compatibility layer in it
+    (a parent app's, like DetectorsAppHealth) makes Edge relaunch itself in a new process, so --dump-dom's
+    output never reaches us (the render check silently reports nothing) and the browser outlives the call."""
+    return {k: v for k, v in os.environ.items() if k.upper() != "__COMPAT_LAYER"}
+
+
 def _pdf_browser() -> str | None:
     """Path of a browser that can print headless: EXHIBIT_PDF_BROWSER, Edge, then Chrome."""
     local = os.environ.get("LOCALAPPDATA", "")
@@ -4527,7 +4911,7 @@ def _export_pdf(exhibit_id: str, version: int | None, item: str | None = None,
         try:
             subprocess.run(
                 command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=_PDF_TIMEOUT,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), env=_browser_env(),
             )
         except subprocess.TimeoutExpired:
             raise _ToolFailure("pdf_failed", "The browser took too long to make the PDF.") from None
@@ -4567,6 +4951,9 @@ _CHECK_SCRIPT = "<script>" + r"""(() => {
   const say = (v) => (v && v.message ? v.message : typeof v === "object" ? (() => { try { return JSON.stringify(v); } catch (e) { return String(v); } })() : String(v));
   addEventListener("error", (e) => {
     const t = e.target;
+    // A library the kits load: a missing local copy (a fresh install, while it downloads) falls back to the
+    // CDN, so its error isn't one; if both fail, the chart or diagram says so itself.
+    if (t && t !== window && t.hasAttribute && t.hasAttribute("data-exhibit-lib")) return;
     if (t && t !== window && (t.tagName === "SCRIPT" || t.tagName === "LINK")) add("Couldn't load " + (t.src || t.href));
     else if (e.message) add(e.message + (e.lineno ? " (line " + e.lineno + ")" : ""));
   }, true);
@@ -4716,7 +5103,7 @@ _CHECK_SCRIPT = "<script>" + r"""(() => {
       const px = sizes[sizes.length >> 1];
       if (px < 10) small.push({ name: k >= 0 ? "Diagram " + (k + 1) : "Drawing " + own + " (it starts “" + [...svg.querySelectorAll("text, foreignObject")].map((x) => x.textContent.trim()).filter(Boolean).join(" ").slice(0, 40) + "”)", px: Math.round(px * 10) / 10 });
     });
-    const report = { errors, diagrams, small, layout: layout(), text: document.body ? document.body.innerText : "" };
+    const report = { errors, diagrams, small, views, layout: layout(), text: document.body ? document.body.innerText : "" };
     let el = document.getElementById("exhibit-check");
     if (!el) {
       el = document.createElement("script");
@@ -4726,8 +5113,222 @@ _CHECK_SCRIPT = "<script>" + r"""(() => {
     }
     el.textContent = JSON.stringify(report).replace(/</g, "\\u003c");
   };
-  addEventListener("load", () => { write(); setTimeout(write, 2000); setTimeout(write, 4500); });
+  // Diagrams no view can show readably (0.4.2): the Slides and Document views fit each diagram to a slide's
+  // body (826 x 357 px, less its step controls) or a Letter page's text column (624 x 864 px), turning it
+  // the other way when that's larger. A diagram whose labels stay under 8 px both ways is too big for that
+  // view (the views themselves aim for 11 px; 8 px flags only the ones no layout can rescue: a 20-step chain,
+  // a 15-message sequence, while a 6-message sequence at 8.6 px passes).
+  let views = [];
+  const checkViews = async () => {
+    const layout = window.__exhibitDiagramLayout;
+    if (!layout) return;
+    await layout.ready();
+    const found = [];
+    for (const [i, w] of [...document.querySelectorAll(".exhibit-diagram-wrap")].entries()) {
+      const box = w.querySelector(".exhibit-diagram-box");
+      if (!box || !box.querySelector("svg")) continue;
+      const extra = w.offsetHeight - box.offsetHeight;  // step controls and captions
+      const slides = await layout.textIn(w, Math.min(826, box.clientWidth), 357 - extra, { grow: true });
+      const page = await layout.textIn(w, Math.min(624, box.clientWidth), 864 - extra);
+      if ((slides !== null && slides < 8) || (page !== null && page < 8)) found.push({ name: "Diagram " + (i + 1), slides, document: page });
+    }
+    views = found;
+    write();
+  };
+  addEventListener("load", () => { write(); checkViews().catch(() => {}); setTimeout(write, 2000); setTimeout(write, 4500); });
 })();""" + "</script>"
+
+
+# Page awareness (0.4.2): the Slides and Document views cut a page into slides and pages in the browser,
+# so the agent couldn't honour "an 8-slide deck" or find "the chart on page 3". show and read lay the page
+# out in each view in a headless browser and return what is on each slide and page. This script, added to
+# raw/<id>/<v>?outline=<view>, reads the laid-out slides (the Slides view's .exhibit-page, a slides preset's
+# section.slide) or document pages (blocks of the .sheet strip, by the page their top is on) and writes
+# them into a JSON script element for --dump-dom.
+_OUTLINE_SCRIPT = r"""<script>(() => {
+  const clean = (t) => String(t || "").replace(/\s+/g, " ").trim();
+  const short = (t, n) => { t = clean(t); return t.length > n ? t.slice(0, n - 1).replace(/\s+\S*$/, "") + " …" : t; };
+  const words = (t) => (clean(t).match(/\S+/g) || []).length;
+  const SKIP = "script, style, template, noscript, [data-exhibit-kit], [data-exhibit-rail], .exhibit-slide-nav, "
+    + ".exhibit-page-extra, pre.exhibit-diagram, .exhibit-diagram-steps, .exhibit-diagram-tools, .exhibit-diagram-print";
+  // Charts and diagrams by the names the item rail gives them; tables and images by their caption or alt text.
+  const things = () => {
+    const out = (window.__exhibitItems ? window.__exhibitItems() : []).map((it) => ({ el: it.el, label: it.kind + ": " + it.name }));
+    const inItem = (el) => out.some((o) => o.el.contains(el));
+    document.querySelectorAll("table").forEach((t) => {
+      if (t.closest(SKIP) || inItem(t)) return;
+      const cap = t.querySelector("caption"), head = [...t.querySelectorAll("th")].slice(0, 3).map((x) => clean(x.textContent)).filter(Boolean);
+      out.push({ el: t, label: "table: " + (cap ? short(cap.textContent, 50) : (head.join(", ") || "") ) + " (" + t.querySelectorAll("tr").length + " rows)" });
+    });
+    document.querySelectorAll("img, figure").forEach((el) => {
+      if (el.closest(SKIP) || inItem(el) || (el.tagName === "IMG" && el.closest("figure"))) return;
+      const cap = el.tagName === "FIGURE" ? el.querySelector("figcaption") : null;
+      const img = el.tagName === "IMG" ? el : el.querySelector("img, svg, canvas");
+      if (!img) return;
+      out.push({ el, label: "image: " + short((cap && cap.textContent) || img.getAttribute("alt") || img.getAttribute("aria-label") || "", 50) });
+    });
+    return out;
+  };
+  // The text of a part of the page, without its title, kits' controls and the inside of charts and diagrams.
+  // Text nodes are joined with a space between elements, so a stat's number and label stay two words.
+  const textOf = (root, without) => {
+    const out = [], walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const el = n.parentElement;
+      if (!el || el.closest(SKIP + ", svg, canvas") || without.some((w) => w.contains(el))) continue;
+      out.push(n.textContent);
+    }
+    return clean(out.join(" ").replace(/ +([.,;:!?)])/g, "$1"));
+  };
+  const slides = () => {
+    const pages = [...document.querySelectorAll(".exhibit-deck .exhibit-page")];
+    const list = pages.length ? pages.map((p) => p.querySelector(".exhibit-slide") || p) : [...document.querySelectorAll("section.slide")];
+    if (!list.length) return null;
+    const all = things();
+    return list.map((s, i) => {
+      const title = s.querySelector(".exhibit-slide-title") || s.querySelector("h1, h2, h3");
+      const has = all.filter((t) => s.contains(t.el)).map((t) => t.label);
+      const text = textOf(s, [title, ...all.map((t) => t.el)].filter(Boolean));
+      const entry = { slide: i + 1, title: title ? short(title.textContent, 90) : "" };
+      const kind = ["title", "section"].find((k) => s.classList.contains(k));
+      if (kind) entry.kind = kind;
+      if (has.length) entry.has = has;
+      if (text) { entry.text = short(text, 110); entry.words = words(text); }
+      // A crowded slide is shrunk to fit (_MOLD_SLIDES_SCRIPT's shrink): the agent sees how far.
+      const body = s.querySelector(".exhibit-slide-body"), k = body && (body.style.transform.match(/scale\(([\d.]+)\)/) || [])[1];
+      if (k && Number(k) < 0.95) entry.shrunk_to = Math.round(Number(k) * 100) + "%";
+      return entry;
+    });
+  };
+  const pages = () => {
+    const sheet = document.querySelector(".exhibit-page-stage > .sheet");
+    const total = document.querySelectorAll(".exhibit-page-card").length;
+    if (!sheet || !total) return null;
+    // Each block's page as a quote from it would name it (_QUOTE_SCRIPT's __exhibitWhere).
+    const pageOf = (el) => { const at = window.__exhibitWhere(el); return Math.max(0, Math.min(total - 1, ((at && at.n) || 1) - 1)); };
+    const out = Array.from({ length: total }, (_, i) => ({ page: i + 1, headings: [], has: [], text: "", words: 0, first: null }));
+    const all = things();
+    all.forEach((t) => { if (sheet.contains(t.el)) out[pageOf(t.el)].has.push(t.label); });
+    const items = all.map((t) => t.el);
+    // Text: headings, and the innermost blocks of text (a paragraph split across pages is two blocks).
+    const blocks = [...sheet.querySelectorAll("h1, h2, h3, h4, h5, h6, p, li, blockquote, pre, dt, dd, td, th, figcaption, .ex-callout, .ex-panel")]
+      .filter((el) => !el.closest(SKIP) && !items.some((x) => x.contains(el))
+        && (/^H[1-6]$/.test(el.tagName) || !el.querySelector("p, li, blockquote, pre, dt, dd, td, th")));
+    let section = "";
+    blocks.forEach((el) => {
+      const r = el.getBoundingClientRect();
+      if (!r.height) return;
+      const p = out[pageOf(el)], t = textOf(el, items);
+      if (!t) return;
+      if (/^H[1-6]$/.test(el.tagName)) {
+        if (Number(el.tagName[1]) <= 3) p.headings.push(short(t, 90));
+        if (!p.first) p.first = "heading";
+        section = short(t, 90);
+        return;
+      }
+      if (!p.first) { p.first = "text"; if (section) p.continues = section; }
+      if (p.text.length < 120) p.text = clean(p.text + " " + t);
+      p.words += words(t);
+    });
+    return out.map((p) => {
+      const entry = { page: p.page };
+      if (p.continues) entry.continues = p.continues;
+      if (p.headings.length) entry.headings = p.headings;
+      if (p.has.length) entry.has = p.has;
+      if (p.text) entry.text = short(p.text, 110);
+      if (p.words) entry.words = p.words;
+      return entry;
+    });
+  };
+  const ready = () => {
+    if ([...document.querySelectorAll(".exhibit-diagram-wrap")].some((w) => !w.dataset.state)) return false;
+    return document.querySelector(".exhibit-deck.scaled, section.slide, .exhibit-page-card") !== null;
+  };
+  const write = () => {
+    if (!ready()) return;
+    let result;
+    try { result = { slides: slides(), pages: pages() }; } catch (err) { result = { error: String(err && err.message || err) }; }
+    let el = document.getElementById("exhibit-outline");
+    if (!el) {
+      el = document.createElement("script");
+      el.id = "exhibit-outline";
+      el.type = "application/json";
+      document.documentElement.appendChild(el);
+    }
+    el.textContent = JSON.stringify(result).replace(/</g, "\\u003c");
+  };
+  // The views lay out after the page loads, and again when diagrams and fonts are in: the last write wins.
+  addEventListener("load", () => { [1500, 3000, 4500, 6500].forEach((t) => setTimeout(write, t)); });
+})();</script>"""
+_OUTLINE_TIMEOUT = 40
+_OUTLINE_VIEWS = {"freeform": ("slides", "document"), "slides": ("slides",), "document": ("document",)}
+
+
+def _headless_dom(url: str, budget_ms: int, timeout: int) -> str | None:
+    """The page's DOM after budget_ms of (virtual) time in a headless browser, or None."""
+    browser = _pdf_browser()
+    if browser is None:
+        return None
+    with tempfile.TemporaryDirectory(prefix="exhibit-check-", ignore_cleanup_errors=True) as work:
+        command = [
+            browser, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+            "--disable-extensions", "--hide-scrollbars", "--window-size=1280,900",
+            f"--virtual-time-budget={budget_ms}",
+            f"--user-data-dir={Path(work) / 'profile'}", "--dump-dom", url,
+        ]
+        try:
+            done = subprocess.run(command, capture_output=True, timeout=timeout, env=_browser_env(),
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+    return done.stdout.decode("utf-8", "replace")
+
+
+def _json_script(dom: str | None, element_id: str) -> dict | None:
+    found = dom and re.search(r'<script[^>]*\bid="' + element_id + r'"[^>]*>(.*?)</script>', dom, re.S)
+    if not found:
+        return None
+    try:
+        value = json.loads(found.group(1))  # script text isn't escaped when the DOM is written out
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _outline(exhibit_id: str, version: int, kind: str, kept_any: bool = False) -> dict[str, Any] | None:
+    """What is on each slide and document page of a version, in the views it can be shown in: {"slides": [...],
+    "pages": [...]} (a freeform page has both). Laid out in a headless browser, one view at a time in
+    parallel, and kept next to the version, so read returns it without laying it out again.
+
+    The layout depends on the plugin build and the diagram look (_page_version), so show lays a new version
+    out for them. read (kept_any) takes whatever was kept, from an earlier build too, and only lays out a
+    version that has nothing kept; a layout that failed is kept as such, so read doesn't try it again."""
+    path = _exhibit_dir(exhibit_id) / f"outline-v{version}.json"
+    try:
+        kept = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(kept, dict) and "outline" in kept and (kept_any or kept.get("build") == _page_version()):
+            return kept["outline"] or None
+    except (OSError, ValueError):
+        pass
+    views = _OUTLINE_VIEWS.get(kind, ())
+    if not views or not _render_check_enabled() or _pdf_browser() is None:
+        return None
+    base = _ensure_server()
+
+    def run(view: str) -> list | None:
+        found = _json_script(_headless_dom(f"{base}raw/{exhibit_id}/{version}?outline={view}", 8000, _OUTLINE_TIMEOUT),
+                             "exhibit-outline")
+        key = "slides" if view == "slides" else "pages"
+        return found.get(key) if found and isinstance(found.get(key), list) else None
+
+    with ThreadPoolExecutor(max_workers=len(views)) as pool:
+        laid = dict(zip(views, pool.map(run, views)))
+    outline = {("slides" if v == "slides" else "pages"): laid[v] for v in views if laid[v] is not None}
+    try:
+        path.write_text(json.dumps({"build": _page_version(), "outline": outline or None}), encoding="utf-8")
+    except OSError:
+        pass
+    return outline or None
 
 
 def _render_check_enabled() -> bool:
@@ -4737,31 +5338,11 @@ def _render_check_enabled() -> bool:
 def _render_check(exhibit_id: str, version: int) -> dict | None:
     """What the saved page does once drawn, from a headless browser: {"errors", "diagrams", "text"}.
     None when there's no browser, the check is off, or the browser didn't report back."""
-    browser = _pdf_browser()
-    if browser is None or not _render_check_enabled():
+    if _pdf_browser() is None or not _render_check_enabled():
         return None
-    url = f"{_ensure_server()}raw/{exhibit_id}/{version}?check=1"
-    with tempfile.TemporaryDirectory(prefix="exhibit-check-", ignore_cleanup_errors=True) as work:
-        command = [
-            browser, "--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-            "--disable-extensions", "--hide-scrollbars", "--window-size=1280,900",
-            "--virtual-time-budget=6000",  # past the check script's last report at 4.5 s
-            f"--user-data-dir={Path(work) / 'profile'}", "--dump-dom", url,
-        ]
-        try:
-            done = subprocess.run(command, capture_output=True, timeout=_CHECK_TIMEOUT,
-                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        except (subprocess.TimeoutExpired, OSError):
-            return None
-    dom = done.stdout.decode("utf-8", "replace")
-    found = re.search(r'<script[^>]*\bid="exhibit-check"[^>]*>(.*?)</script>', dom, re.S)
-    if not found:
-        return None
-    try:
-        report = json.loads(found.group(1))  # script text isn't escaped when the DOM is written out
-    except ValueError:
-        return None
-    return report if isinstance(report, dict) else None
+    # 6 s: past the check script's last report at 4.5 s
+    return _json_script(_headless_dom(f"{_ensure_server()}raw/{exhibit_id}/{version}?check=1", 6000, _CHECK_TIMEOUT),
+                        "exhibit-check")
 
 
 def _check_note(report: dict) -> str | None:
@@ -4776,13 +5357,20 @@ def _check_note(report: dict) -> str | None:
         problems.append(f"{d.get('name', 'A drawing')} has text drawn at {d.get('px')} px in a 1280 px wide window, "
                         "too small to read. Make it larger: fewer things side by side (a top-to-bottom layout), "
                         "shorter labels, or a bigger font.")
+    for d in report.get("views") or []:
+        where = [f"{label} view ({d.get(key)} px)" for key, label in (("slides", "Slides"), ("document", "Document"))
+                 if isinstance(d.get(key), (int, float)) and d[key] < 8]
+        if where:
+            problems.append(f"{d.get('name', 'A diagram')} is too big to read in the {' and the '.join(where)}, even "
+                            "turned the other way: its labels shrink below 8 px to fit a slide or a page. Split it "
+                            "into smaller diagrams (a slide holds about 5 boxes in a row, or 4 in a column), "
+                            "or shorten its labels.")
     problems += [f"Script error: {e}" for e in report.get("errors") or []]
     if not problems:
         return None
     return ("The page was opened in a browser after saving, and it has problems the user will see:\n- "
             + "\n- ".join(problems[:8])
-            + "\nFix them now, before you reply: change the page (read the file again before editing it, or "
-              "write it whole) and call show again with this exhibit_id.")
+            + "\nFix them now, before you reply: change the page " + _EDITS_HINT + ".")
 
 
 def _quote_list(items: list, limit: int = 3) -> str:
@@ -4841,36 +5429,36 @@ def _layout_note(report: dict, kind: str) -> str | None:
         notes.append(
             f"The page's content runs {column} px wide in a {found.get('window') or 1280} px window. Long lines are "
             f"hard to read: keep freeform pages to one centered column, max-width {_MAX_COLUMN}px with margin 0 auto "
-            "(see \"Page width\" in the exhibit instructions), and call show again with this exhibit_id.")
+            "(see \"Page width\" in the exhibit instructions), and call show again with this exhibit_id and edits.")
     titles = found.get("titles") or []
     if titles:
         notes.append(
             f"The heading right above {_quote_list(titles)} repeats the chart's own title, so it shows twice. The kit "
-            "draws the chart's title: remove the heading (or the chart's title) and call show again with this exhibit_id.")
+            "draws the chart's title: remove the heading (or the chart's title) and call show again with this exhibit_id and edits.")
     unnamed = found.get("unnamed") or []
     if unnamed:
         notes.append(
             f"The value axis of {_quote_list(unnamed)} has no name, so the reader can't tell what the numbers are. Add "
             "yLabel with the measure and its unit (\"Facts found (of 72)\", \"Seconds per question\"), and better: "
-            "\"higher\" or \"lower\" when one direction is clearly better, then call show again with this exhibit_id.")
+            "\"higher\" or \"lower\" when one direction is clearly better, then call show again with this exhibit_id and edits.")
     restyled = found.get("restyled") or []
     if restyled:
         notes.append(
             f"The page's own CSS restyles Exhibit's page parts ({', '.join(restyled)}). Exhibit already styles them, "
             "so the page looks like every other exhibit. Unless the user asked for a different look, delete those "
-            "rules (and any blanket reset such as * { padding: 0 }) and call show again with this exhibit_id.")
+            "rules (and any blanket reset such as * { padding: 0 }) and call show again with this exhibit_id and edits.")
     numbered = found.get("selfNumbered") or []
     if numbered:
         notes.append(
             f"Reference items start with their own number ({_quote_list(numbered)}), but ex-refs already numbers "
             "them, so they read \"1. 1. …\". Write the items without a leading number (for a file named \"1. Notes.md\", "
-            "write its name without the \"1.\") and call show again with this exhibit_id.")
+            "write its name without the \"1.\") and call show again with this exhibit_id and edits.")
     lone = found.get("lone") or []
     if lone:
         notes.append(
             f"A score bar stands alone ({_quote_list(lone)}). Score bars compare items on one scale, so they come in "
             "groups of two or more rows; a single number belongs in the text or a stat tile. Fix it and call show "
-            "again with this exhibit_id.")
+            "again with this exhibit_id and edits.")
     return "\n\n".join(notes) or None
 
 
@@ -4918,7 +5506,7 @@ def _lost_text_note(keys: list[str], report: dict) -> str | None:
         return None
     return (f"{len(gone)} passages of text that were on the page show refused are gone from this version, such as "
             f"{_quote_list([g[:60] for g in gone], 2)}. Fixing a page rule shouldn't remove other content. If you didn't "
-            "mean to cut them, put them back (read the file to see what's left) and call show again with this exhibit_id.")
+            "mean to cut them, put them back (read with include_html to see what's left) and call show again with this exhibit_id and edits.")
 
 
 def _page_text(report: dict) -> str:
@@ -5365,7 +5953,8 @@ window.addEventListener("message", (event) => {
   }
   else if (m.action === "edit") { toggleChartData(it.key); tellRail(); }
   else if (m.action === "ref") copyText(
-    referenceFor(config.current, savedTitle) + " " + (it.kind === "chart" ? "chart" : "diagram") + " \"" + it.name + "\"",
+    referenceFor(config.current, savedTitle, m.where && typeof m.where === "object" ? m.where : null)
+      + " " + (it.kind === "chart" ? "chart" : "diagram") + " \"" + it.name + "\"",
     "Reference to the " + railName(it) + " copied. Paste it into a WorkSwarm chat.");
   else if (m.action === "export") {
     const f = frame.getBoundingClientRect(), r = m.rect || {};
@@ -5513,7 +6102,8 @@ document.addEventListener("keydown", (e) => {
 # It reports the page in view to the viewer and moves to a page when asked.
 _DOCUMENT_SCRIPT = """<script>(() => {
   const standalone = parent === window;
-  const W = 816, H = 1056, MT = 68, MS = 64, MB = 76;  // Letter in CSS px; margins 18, 17 and 20 mm
+  const W = 816, H = 1056, MT = 96, MS = 96, MB = 96;  // Letter in CSS px; 1 in margins, Word's and Google Docs' default
+  window.__exhibitPageRoom = H - MT - MB;  // the height content can have on one page (the document mold sizes diagrams to it)
   let sheet = null, stage = null, total = 0, current = -1, scale = 1, extras = [];
   const css = (rules) => { const s = document.createElement("style"); s.textContent = rules; document.head.appendChild(s); return s; };
   const paperRules = () => {
@@ -5537,11 +6127,14 @@ _DOCUMENT_SCRIPT = """<script>(() => {
     }
     return copied;
   };
-  const relTop = (el) => {
-    let y = 0;
-    for (let n = el; n && n !== sheet; n = n.offsetParent) y += n.offsetTop;
-    return y;
+  // Where a block sits on the sheet and how tall it looks, in page px. From its box on screen, not
+  // offsetTop: an inline <svg> has none, and a block shrunk to fit (below) is shorter than its layout.
+  const zoomOf = () => sheet.getBoundingClientRect().width / sheet.offsetWidth || 1;
+  const place = (el) => {
+    const z = zoomOf(), r = el.getBoundingClientRect();
+    return { top: (r.top - sheet.getBoundingClientRect().top) / z, height: r.height / z, width: r.width / z };
   };
+  const relTop = (el) => place(el).top;
   const isContainer = (el) => {
     const s = getComputedStyle(el);
     if (s.display !== "block" || !el.children.length) return false;
@@ -5551,19 +6144,169 @@ _DOCUMENT_SCRIPT = """<script>(() => {
     if (s.backgroundColor !== "rgba(0, 0, 0, 0)" && s.backgroundColor !== "transparent") return false;
     return true;
   };
+  // A styled box (a card: padding, border, background) or a block marked to stay whole is still broken
+  // between its children when it's taller than a page and they sit one under another, as Word and
+  // browsers' print layout break a box that can't fit (its background then runs onto the next page).
+  // Pictures, charts, diagrams, tables, code and figures aren't: they're shrunk to fit instead (below).
+  const ATOMIC = /^(IMG|SVG|CANVAS|VIDEO|IFRAME|OBJECT|EMBED|PICTURE|TABLE|FIGURE|PRE)$/i;
+  const breakable = (el) => {
+    if (ATOMIC.test(el.tagName) || el.matches(".exhibit-diagram-wrap, .exhibit-chart, [data-chart]")) return false;
+    if (!(el instanceof HTMLElement) || el.offsetHeight <= H - MT - MB) return false;
+    const kids = [...el.children].filter((k) => k.getBoundingClientRect().height);
+    if (kids.length < 2) return false;
+    for (let i = 1; i < kids.length; i++) {  // side by side (a grid, columns): not one under another
+      const a = kids[i - 1].getBoundingClientRect(), b = kids[i].getBoundingClientRect();
+      if (b.top < a.bottom - 2) return false;
+    }
+    return true;
+  };
+  // A picture: media, a diagram, a chart, or a block that is mostly one of them. Text is never shrunk
+  // just to save space, only when it couldn't fit otherwise.
+  const MEDIA = "img, svg, canvas, video, iframe, object, embed, picture";
+  const picture = (el) => {
+    if (el.matches(MEDIA + ", .exhibit-diagram-wrap") || (window.__exhibitChartInfo && window.__exhibitChartInfo.has(el))) return true;
+    const big = el.querySelector(MEDIA), h = el.getBoundingClientRect().height;
+    return !!big && h > 0 && big.getBoundingClientRect().height >= 0.7 * h;
+  };
   const blocks = (el, out) => {
     for (const child of el.children) {
       if (child.classList.contains("exhibit-page-extra")) continue;
       const s = getComputedStyle(child);
       if (s.display === "none" || s.position === "absolute" || s.position === "fixed") continue;
       if (child.tagName === "SCRIPT" || child.tagName === "STYLE") continue;
-      if (isContainer(child)) blocks(child, out); else out.push(child);
+      if (isContainer(child) || breakable(child)) blocks(child, out); else out.push(child);
     }
     return out;
+  };
+  // A block wider than the text column, or taller than the room left on its page, is shrunk to fit,
+  // keeping its shape: as Pandoc's LaTeX output caps every picture at the line width and the text
+  // height (\\maxwidth, \\maxheight, keepaspectratio) and Word scales a picture down to the margins.
+  // A transform, so the page's own code (a chart's hover) still sees true positions; the layout height
+  // it no longer uses is given back with a negative bottom margin.
+  let shrunk = [];
+  const SHRINK = ["transform", "transform-origin", "margin-bottom", "margin-left", "overflow", "zoom"];
+  const unshrinkAll = () => {
+    for (const [el, saved] of shrunk) {
+      SHRINK.forEach((p, i) => {
+        if (saved[i]) el.style.setProperty(p, saved[i][0], saved[i][1]); else el.style.removeProperty(p);
+      });
+      delete el.dataset.exhibitScale;
+    }
+    shrunk = [];
+  };
+  const scaleOf = (el) => parseFloat(el.dataset && el.dataset.exhibitScale) || 1;
+  const shrinkTo = (el, k, center) => {
+    const before = place(el), column = W - 2 * MS;
+    let entry = shrunk.find((x) => x[0] === el);
+    if (!entry) {
+      entry = [el, SHRINK.map((p) => el.style.getPropertyValue(p)
+        ? [el.style.getPropertyValue(p), el.style.getPropertyPriority(p)] : null),
+        parseFloat(getComputedStyle(el).marginBottom) || 0, el.offsetHeight !== undefined ? el.offsetHeight : before.height];
+      shrunk.push(entry);
+    }
+    const mb = entry[2], layoutH = entry[3];
+    const dx = center ? Math.max(0, (column - before.width / scaleOf(el) * k) / 2) : 0;
+    el.style.setProperty("overflow", "visible", "important");
+    if (document.documentElement.classList.contains("exhibit-paper")) {
+      // On paper, zoom: printing breaks pages by layout boxes, which a transform doesn't shrink.
+      el.style.setProperty("zoom", String(k), "important");
+      el.style.setProperty("margin-left", (dx / k) + "px", "important");
+      el.dataset.exhibitScale = k;
+      return;
+    }
+    el.dataset.exhibitScale = k;
+    el.style.setProperty("transform-origin", "0 0", "important");
+    el.style.setProperty("transform", "translateX(" + dx + "px) scale(" + k + ")", "important");
+    el.style.setProperty("margin-bottom", (mb - layoutH * (1 - k)) + "px", "important");
+  };
+  const fitWidth = (list) => {
+    const column = W - 2 * MS;
+    for (const el of list) {
+      if (el.tagName === "PRE") continue;  // code wraps on the page instead (the mold's style)
+      const sheetLeft = sheet.getBoundingClientRect().left, z = zoomOf();
+      const left = (el.getBoundingClientRect().left - sheetLeft) / z - MS;
+      const wide = Math.max(el.scrollWidth || 0, place(el).width) + Math.max(0, left);
+      if (wide > column + 1) shrinkTo(el, column / wide, false);
+    }
+  };
+  // Splitting a paragraph across pages, as Paged.js does: its text after the last line that fits moves to a
+  // copy of the paragraph placed after it, keeping the lines its orphans and widows ask for on each side
+  // (2 by default, as in Word). Only plain paragraphs of text and inline formatting, without ids. Undone
+  // (the text moved back) before each layout.
+  const INLINE = /^(A|ABBR|B|BDI|BDO|BR|CITE|CODE|DATA|DFN|EM|I|KBD|MARK|Q|S|SAMP|SMALL|SPAN|STRONG|SUB|SUP|TIME|U|VAR|DEL|INS)$/;
+  let splits = [];
+  const plainText = (el) => el.tagName === "P" && !el.id && el instanceof HTMLElement
+    && [...el.querySelectorAll("*")].every((d) => INLINE.test(d.tagName) && !d.id);
+  const leadIn = (el) => {
+    if (el.tagName !== "P") return false;
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || parseFloat(getComputedStyle(el).fontSize) * 1.4;
+    return el.offsetHeight <= lh * 3.5;
+  };
+  const split = (el, limit) => {
+    if (!plainText(el)) return null;
+    const texts = [], walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let n; (n = walker.nextNode());) if (n.length) texts.push(n);
+    const total = texts.reduce((s, n) => s + n.length, 0);
+    if (total < 2) return null;
+    const at = (g) => { for (const n of texts) { if (g < n.length) return [n, g]; g -= n.length; } return null; };
+    const sheetTop = sheet.getBoundingClientRect().top, z = zoomOf();
+    const box = (g) => {  // the character's box on the sheet, in page px
+      const [n, o] = at(g), r = document.createRange();
+      r.setStart(n, o); r.setEnd(n, o + 1);
+      const rect = [...r.getClientRects()].pop() || r.getBoundingClientRect();
+      return { top: (rect.top - sheetTop) / z, bottom: (rect.bottom - sheetTop) / z };
+    };
+    let lo = -1, hi = total - 1;  // last character whose line ends above the limit
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (box(mid).bottom <= limit) lo = mid; else hi = mid - 1; }
+    if (lo < 0) return null;
+    const lineTop = box(lo).top;
+    let j = lo + 1, end = total;  // first character of the next line
+    while (j < end) { const mid = (j + end) >> 1; if (box(mid).top > lineTop + 2) end = mid; else j = mid + 1; }
+    if (j >= total) return null;
+    const s = getComputedStyle(el), first = box(0), lh = Math.max(1, first.bottom - first.top);
+    const p = place(el), before = Math.round((box(lo).bottom - p.top) / lh), after = Math.round((p.top + p.height - box(j).top) / lh);
+    const orphans = parseInt(s.orphans) || 2, widows = parseInt(s.widows) || 2;
+    // Too few lines left for the next page: move lines over to it, if enough stay on this one.
+    if (after < widows && before - (widows - after) >= orphans) return split(el, box(lo).bottom - (widows - after) * lh + 1);
+    if (before < orphans || after < widows) return null;
+    const [n, o] = at(j), r = document.createRange();
+    r.setStart(n, o); r.setEnd(el, el.childNodes.length);
+    const rest = el.cloneNode(false);
+    rest.append(r.extractContents());
+    rest.classList.add("exhibit-page-rest");
+    const saved = el.getAttribute("style");
+    el.style.setProperty("margin-bottom", "0", "important");
+    el.style.setProperty("text-align-last", s.textAlign === "justify" ? "justify" : "auto");
+    rest.style.setProperty("margin-top", "0", "important");
+    rest.style.setProperty("text-indent", "0", "important");
+    el.after(rest);
+    splits.push([el, rest, saved]);
+    return rest;
+  };
+  const unsplitAll = () => {
+    // Elements the split cut in two (a <b> across the break) are joined again.
+    const join = (a, b) => {
+      if (!a || !b || a.nodeType !== 1 || b.nodeType !== 1 || !a.cloneNode(false).isEqualNode(b.cloneNode(false))) return;
+      const seam = a.lastChild;
+      while (b.firstChild) a.append(b.firstChild);
+      b.remove();
+      if (seam) join(seam, seam.nextSibling);
+    };
+    for (const [el, rest, saved] of splits.reverse()) {
+      const seam = el.lastChild;
+      while (rest.firstChild) el.append(rest.firstChild);
+      rest.remove();
+      if (seam) join(seam, seam.nextSibling);
+      el.normalize();
+      if (saved === null) el.removeAttribute("style"); else el.setAttribute("style", saved);
+    }
+    splits = [];
   };
   const clear = () => {
     extras.forEach((e) => e.remove());
     extras = [];
+    unshrinkAll();
+    unsplitAll();
     if (sheet) sheet.style.height = "";
   };
   const spacer = (before, target) => {
@@ -5601,18 +6344,51 @@ _DOCUMENT_SCRIPT = """<script>(() => {
     clear();
     const list = blocks(sheet, []);
     watch(list);
+    fitWidth(list);
+    const ROOM = H - MT - MB, MIN_SHRINK = 0.5, FIT_HERE = 2 / 3;
+    // Shrinks a block to the room left on its page, unless that would make it under half size (a
+    // table, or something far taller than a page, then runs on instead: nothing in it is lost).
+    const shrinkToPage = (el) => {
+      if (el.tagName === "TABLE" || el.tagName === "PRE") return false;
+      const at = place(el), bottom = (Math.floor(at.top / H) + 1) * H - MB;
+      const k = (bottom - at.top) / at.height * (1 - 1e-3);
+      if (k >= 1 || scaleOf(el) * k < MIN_SHRINK) return false;
+      shrinkTo(el, scaleOf(el) * k, true);
+      return true;
+    };
     for (let i = 0; i < list.length; i++) {
       const el = list[i];
-      const top = relTop(el), height = el.offsetHeight;
+      const at = place(el), top = at.top, height = at.height;
       const page = Math.floor(top / H);
       const forced = getComputedStyle(el).breakBefore === "page" && top > page * H + MT + 1;
-      const crosses = top + height > (page + 1) * H - MB + 0.5 && height <= H - MT - MB;
+      const crosses = top + height > (page + 1) * H - MB + 0.5;
       if (!forced && !crosses) continue;
       let anchor = el, k = i;  // keep headings (break-after: avoid) with the block that follows
       while (!forced && k > 0 && getComputedStyle(list[k - 1]).breakAfter === "avoid"
              && Math.floor(relTop(list[k - 1]) / H) === page && i - k < 3) { k--; anchor = list[k]; }
-      if (relTop(anchor) <= page * H + MT + 1) continue;  // already at the top of a page: let it overflow
+      const atTop = relTop(anchor) <= page * H + MT + 1;
+      // A paragraph is split at a line, so pages end at the bottom margin rather than a paragraph early
+      // (its heading stays above it when its first lines fit: the paragraph's orphans). First, so that a
+      // paragraph longer than a page runs on over pages rather than being shrunk onto one.
+      if (!forced) {
+        const rest = split(el, (page + 1) * H - MB);
+        if (rest) { list.splice(i + 1, 0, rest); continue; }
+      }
+      if (!forced && (atTop || height > ROOM)) {
+        // Too tall for any page (or for one with its heading): fit it where it is when at least two
+        // thirds of it fit there, else start a page and fit it there.
+        if (!atTop && (page + 1) * H - MB - top < height * FIT_HERE) spacer(anchor, (page + 1) * H + MT);
+        shrinkToPage(el);
+        continue;
+      }
+      // A picture that two thirds of fits here is shrunk where it is, rather than leave a page mostly empty.
+      if (!forced && anchor === el && picture(el) && (page + 1) * H - MB - top >= height * FIT_HERE && shrinkToPage(el)) continue;
+      // A heading and the short lead-in under it go with the picture they introduce.
+      if (!forced && anchor === el && i > 1 && picture(el) && leadIn(list[i - 1])
+          && getComputedStyle(list[i - 2]).breakAfter === "avoid" && Math.floor(relTop(list[i - 2]) / H) === page
+          && relTop(list[i - 2]) > page * H + MT + 1) anchor = list[i - 2];
       spacer(anchor, (page + 1) * H + MT);
+      if (place(el).top + place(el).height > (page + 2) * H - MB + 0.5) shrinkToPage(el);  // still too tall with its heading
     }
     total = Math.max(1, Math.ceil((sheet.scrollHeight - 1) / H));
     sheet.style.height = (total * H - 2) + "px";
@@ -5716,9 +6492,14 @@ def _page_kind(page: str) -> str:
 # Default font (0.4.1): pages that set no font got the browser's default serif (Times New Roman); on
 # 2026-11-13, 3 of 9 DeepSeek Pro pages had none. Every page gets the system sans and monospace, with
 # zero specificity (:where) at the top of <head>, so any font the page sets still wins.
+_SKILL_COLORS = "--bg:#ffffff;--fg:#1d1d1b;--muted:#6b6b66;--line:#e2e2dc;--accent:#ff8821;--accent-ink:#b85500"
 _BASE_FONT_STYLE = ('<style data-exhibit-kit="font">:where(html){font-family:system-ui,-apple-system,"Segoe UI",'
                     'Roboto,"Helvetica Neue",Arial,sans-serif}:where(code,kbd,samp,pre){font-family:ui-monospace,'
-                    'SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}</style>')
+                    'SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}'
+                    # The skill's colour variables (0.4.2): a page that draws with var(--fg) and friends but never
+                    # declares them (Office perk satisfaction, 2026-11-18: an SVG's axes and grid vanished, its text
+                    # went black) gets the skill's light values. Zero specificity, so a page's own :root wins.
+                    ':where(:root){' + _SKILL_COLORS + '}</style>')
 
 
 def _preset_scripts(page: str, thumbnail: bool) -> str:
@@ -5925,7 +6706,7 @@ _ITEMS_SCRIPT = """<script>(() => {
         fallback: /^chart-\\d+$/.test(c.ref) ? "" : human(c.ref) });
     }
     document.querySelectorAll("pre.exhibit-diagram").forEach((pre, i) => {
-      const wrap = pre.nextElementSibling;
+      const wrap = pre.exhibitWrap || pre.nextElementSibling;
       if (!wrap || !wrap.classList.contains("exhibit-diagram-wrap")) return;
       list.push({ el: wrap, kind: "diagram", id: "diagram:" + (pre.id || i + 1),
         title: pre.dataset.name || pre.getAttribute("title") || "", fallback: human(pre.id) });
@@ -6025,7 +6806,8 @@ _ITEMS_SCRIPT = """<script>(() => {
   const ask = (action, it, button) => {
     const r = button.getBoundingClientRect();
     parent.postMessage({ channel: "exhibit-item-action", action, rect: { left: r.left, top: r.top, width: r.width, height: r.height },
-      item: { id: it.id, kind: it.kind, key: it.key || "", name: it.name }, text: action === "copy" ? plain(it.el) : undefined }, "*");
+      item: { id: it.id, kind: it.kind, key: it.key || "", name: it.name }, text: action === "copy" ? plain(it.el) : undefined,
+      where: window.__exhibitWhere ? window.__exhibitWhere(it.el) : null }, "*");
   };
   const button = (icon, label, run) => {
     const b = document.createElement("button");
@@ -6235,6 +7017,7 @@ _MOLD_BLOCKS_SCRIPT = r"""<script>(() => {
 
 _MOLD_SLIDES_SCRIPT = r"""<script>(() => {
   const MIN_FIT = 0.6;  // our slides preset's smallest text
+  const PICTURE_GIVE = 0.15;  // how much of its size a slide's picture gives up to keep the text around it
   const isHeading = (el) => /^H[1-6]$/.test(el.tagName);
   const level = (h) => Number(h.tagName[1]);
   const ready = () => new Promise((resolve) => {
@@ -6247,7 +7030,7 @@ _MOLD_SLIDES_SCRIPT = r"""<script>(() => {
     check();
   });
   const make = (tag, cls) => { const el = document.createElement(tag); if (cls) el.className = cls; return el; };
-  const mold = () => {
+  const mold = async () => {
     // Colours of the page, for the slides' background, accent and muted text.
     const cs = getComputedStyle(document.body), root = getComputedStyle(document.documentElement);
     const bg = [cs.backgroundColor, root.backgroundColor].find((c) => c && !/rgba\([^)]*,\s*0\)$/.test(c) && c !== "transparent") || "#fff";
@@ -6300,14 +7083,101 @@ _MOLD_SLIDES_SCRIPT = r"""<script>(() => {
     for (const s of [...slides]) {
       if (!s.body.children.length && s.kind === "plain" && !s.slide.querySelector(".exhibit-slide-title")) { s.page.remove(); slides.splice(slides.indexOf(s), 1); }
     }
+    // A slide's one picture (a kit chart or diagram) takes the room the rest of the slide leaves, as
+    // reveal.js's r-stretch does, before anything shrinks or moves to another slide: a chart redraws at that
+    // height, a diagram is drawn at the size that fits it (growing up to larger labels, never below
+    // readable ones unless it's alone and must). Slides with several pictures keep them as they are.
+    const layout = window.__exhibitDiagramLayout;
+    const picture = (body) => {
+      const diagrams = layout ? [...body.querySelectorAll(".exhibit-diagram-wrap")].filter((w) => w.querySelector(".exhibit-diagram-box svg")) : [];
+      const charts = window.__exhibitChartInfo ? [...window.__exhibitChartInfo.keys()].filter((el) => body.contains(el)) : [];
+      if (diagrams.length + charts.length !== 1) return null;
+      return diagrams.length ? { kind: "diagram", el: diagrams[0], box: diagrams[0].querySelector(".exhibit-diagram-box") }
+                             : { kind: "chart", el: charts[0] };
+    };
+    const roomFor = (body, el) => body.clientHeight - (body.scrollHeight - el.getBoundingClientRect().height) - 2;
+    const stretch = (s, force) => {
+      const pic = picture(s.body);
+      if (!pic) return false;
+      if (pic.kind === "chart") {
+        const h = roomFor(s.body, pic.el);
+        if (h < 220 && !force) return false;
+        pic.el.style.setProperty("height", Math.max(220, Math.floor(h)) + "px", "important");
+        return true;
+      }
+      return layout.fit(pic.el, pic.box.clientWidth, roomFor(s.body, pic.box.querySelector("svg")), { grow: true, force });
+    };
+    // First, a diagram is drawn in the direction that suits its slide (a tall flowchart on a wide slide
+    // goes left to right).
+    if (layout) {
+      await layout.ready();
+      for (const s of slides) {
+        const pic = picture(s.body);
+        if (pic && pic.kind === "diagram") {
+          await layout.orient(pic.el, pic.box.clientWidth, roomFor(s.body, pic.box.querySelector("svg")), { grow: true });
+        }
+      }
+    }
     // Fit: shrink to fit down to MIN_FIT; past that, continue on another slide, breaking between
     // blocks and never right after a heading. A single block too tall even alone is scaled to fit.
+    // Shrinking is a transform on a body laid out 1/k as large, as reveal.js scales its slides, not CSS
+    // zoom: under zoom, charts and other canvases read the mouse at k times its real position (ECharts
+    // hovered the wrong bar, 2026-11-17), while transforms are mapped back by the browser.
+    const unshrink = (body) => {
+      for (const p of ["transform", "transform-origin", "flex", "width", "height"]) body.style.removeProperty(p);
+    };
+    const shrink = (body, k) => {
+      const w = body.clientWidth, h = body.clientHeight;  // the room, before shrinking
+      body.style.flex = "none";
+      body.style.width = (w / k) + "px";
+      body.style.height = (h / k) + "px";
+      body.style.transformOrigin = "0 0";
+      body.style.transform = "scale(" + k + ")";
+    };
     const fit = (s) => {
       const body = s.body;
-      body.style.zoom = "";
+      unshrink(body);
+      const pic = picture(body);
+      if (pic && !stretch(s, false)) {
+        // The picture comes first, as on a hand-made slide (one visual per slide): when what follows it
+        // costs it more than PICTURE_GIVE of the size it would have with only what comes before it (its
+        // heading, a lead-in), what follows goes on to a "(continued)" slide. Then it takes the room it
+        // has, readable or not (the page check warns about diagrams no view can show readably).
+        const kids = [...body.children], at = kids.findIndex((k) => k.contains(pic.el));
+        if (at >= 0 && at < kids.length - 1) {
+          const inner = pic.kind === "diagram" ? pic.box.querySelector("svg") : pic.el;
+          const picH = inner.getBoundingClientRect().height;
+          const after = body.scrollHeight - (kids[at + 1].getBoundingClientRect().top - body.getBoundingClientRect().top);
+          const here = roomFor(body, inner), without = here + after;
+          const size = (h) => pic.kind === "diagram" ? layout.textAt(pic.el, pic.box.clientWidth, h, { grow: true }) : Math.min(h, 420);
+          if (size(here) < size(without) * (1 - PICTURE_GIVE) && picH > 0) {
+            moveOn(s, kids.slice(at + 1));
+            return;
+          }
+        }
+        // Likewise when the text before it squeezes it: it moves on, with its lead-in (a short paragraph
+        // right before it), unless only headings come before it.
+        if (at > 0 && pic.kind === "diagram") {
+          let from = at;
+          const lead = kids[at - 1];
+          if (lead.tagName === "P" && lead.getBoundingClientRect().height < 80) from = at - 1;
+          const before = kids.slice(0, from);
+          if (before.some((k) => !isHeading(k))) {
+            const inner = pic.box.querySelector("svg");
+            const top = kids[from].getBoundingClientRect().top - body.getBoundingClientRect().top;
+            const here = roomFor(body, inner), alone = here + top;
+            if (layout.textAt(pic.el, pic.box.clientWidth, here, { grow: true })
+                < layout.textAt(pic.el, pic.box.clientWidth, alone, { grow: true }) * (1 - PICTURE_GIVE)) {
+              moveOn(s, kids.slice(from));
+              return;
+            }
+          }
+        }
+        stretch(s, true);
+      }
       const room = body.clientHeight, need = body.scrollHeight;
       if (need <= room + 1) return;
-      if (need * MIN_FIT <= room) { body.style.zoom = String(Math.floor(room / need * 1000) / 1000); return; }
+      if (need * MIN_FIT <= room) { shrink(body, Math.floor(room / need * 1000) / 1000); return; }
       const kids = [...body.children];
       const top = body.getBoundingClientRect().top;
       let cut = kids.findIndex((k, i) => i > 0 && k.getBoundingClientRect().bottom - top > room / MIN_FIT);
@@ -6317,9 +7187,11 @@ _MOLD_SLIDES_SCRIPT = r"""<script>(() => {
         // One block too tall even alone: like reveal.js's r-stretch, its biggest picture (svg, canvas,
         // img, video) shrinks to the room left, keeping its shape; then the text shrinks if it must.
         // A kit chart redraws at any size, so it gets a shorter box instead (its text stays readable).
-        const charts = window.__exhibitChartInfo ? [...window.__exhibitChartInfo.keys()].filter((el) => kids[0].contains(el)) : [];
+        // A slide's one kit picture fills what's left, even below readable text (the page check warns).
+        const fitted = stretch(s, true);
+        const charts = fitted || !window.__exhibitChartInfo ? [] : [...window.__exhibitChartInfo.keys()].filter((el) => kids[0].contains(el));
         const chart = charts.sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0];
-        const media = chart ? null : [kids[0], ...kids[0].querySelectorAll("svg, canvas, img, video")]
+        const media = chart || fitted ? null : [kids[0], ...kids[0].querySelectorAll("svg, canvas, img, video")]
           .filter((m) => m.matches("svg, canvas, img, video") && !m.closest("svg svg"))
           .sort((a, b) => b.getBoundingClientRect().height - a.getBoundingClientRect().height)[0];
         if (chart) {
@@ -6334,14 +7206,18 @@ _MOLD_SLIDES_SCRIPT = r"""<script>(() => {
           }
         }
         const left = body.scrollHeight;
-        if (left > room + 1) body.style.zoom = String(Math.max(0.25, Math.floor(room / left * 1000) / 1000));
+        if (left > room + 1) shrink(body, Math.max(0.25, Math.floor(room / left * 1000) / 1000));
         return;
       }
+      moveOn(s, kids.slice(cut));
+    };
+    // Blocks that don't fit go on to a new "(continued)" slide after this one; both are fitted again.
+    const moveOn = (s, blocks) => {
       const heading = s.title ? make("h2") : null;
       if (heading) heading.textContent = s.title.replace(/\s*\(continued\)$/, "") + " (continued)";
       const next = newSlide(s.kind === "title" ? "plain" : s.kind, heading);
       s.page.after(next.page);
-      kids.slice(cut).forEach((k) => next.body.append(k));
+      blocks.forEach((k) => next.body.append(k));
       fit(s);
       fit(next);
     };
@@ -6381,7 +7257,7 @@ _MOLD_SLIDES_SCRIPT = r"""<script>(() => {
 
 _MOLD_DOCUMENT_STYLE = r"""<style data-exhibit-kit="mold">
 h1, h2, h3, h4, h5, h6 { break-after: avoid; }
-p, li { orphans: 3; widows: 3; }
+p, li { orphans: 2; widows: 2; }  /* CSS's and Word's widow/orphan default */
 figure, table, pre, blockquote, img, svg, canvas, .exhibit-diagram-wrap, .exhibit-mold-keep,
 .ex-callout, .ex-panel, .ex-stats, .ex-stat, .ex-quote, .ex-compare, .ex-terms > *, .ex-steps > li, .ex-score { break-inside: avoid; }
 .exhibit-page-card { background: var(--exhibit-sheet-bg, #fff) !important; }
@@ -6392,6 +7268,8 @@ figure, table, pre, blockquote, img, svg, canvas, .exhibit-diagram-wrap, .exhibi
 html.exhibit-paged body { max-width: none !important; width: auto !important; margin-left: 0 !important; margin-right: 0 !important;
   padding-left: 0 !important; padding-right: 0 !important; }
 .exhibit-mold-sheet * { max-width: 100%; box-sizing: border-box; }
+/* Code wraps at the page's margin, as on paper, instead of scrolling. */
+.exhibit-mold-sheet pre { white-space: pre-wrap !important; overflow-wrap: anywhere; }
 /* On paper, content that grows after the pages were laid out (a page's own print rules, a late redraw)
    runs onto another page instead of being cut off at the last one. */
 @media print { html.exhibit-paged .exhibit-mold-sheet { height: auto !important; overflow: visible !important; } }
@@ -6410,7 +7288,25 @@ html.exhibit-paged body { max-width: none !important; width: auto !important; ma
       sheet.append(node);
     }
     document.body.append(sheet);
-    const bg = [document.body, document.documentElement].map((el) => getComputedStyle(el).backgroundColor)
+    // The page's own outer wrappers (an element holding all of the content, like the skill's centred
+    // column or a card around the whole page) give way to the page's margins, as the body's own width
+    // and padding do: every exhibit gets the same 1 in margins. Their background becomes the page's.
+    const wrappers = [];
+    const shown = (el) => [...el.children].filter((k) => !/^(SCRIPT|STYLE|TEMPLATE|NOSCRIPT|LINK|META)$/.test(k.tagName)
+      && getComputedStyle(k).display !== "none" && !["absolute", "fixed"].includes(getComputedStyle(k).position));
+    for (let el = sheet, kids = shown(el); kids.length === 1 && wrappers.length < 4; kids = shown(el)) {
+      el = kids[0];
+      const s = getComputedStyle(el);
+      if (/^H[1-6]$/.test(el.tagName) || s.display !== "block" || !el.children.length
+          || el.matches(".exhibit-diagram-wrap") || /(^|\s)ex-/.test(el.className)) break;
+      wrappers.push([el, getComputedStyle(el).backgroundColor]);
+    }
+    const unset = "padding:0!important;margin:0!important;max-width:none!important;width:auto!important;"
+      + "border:0!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;";
+    wrappers.forEach(([el]) => { el.style.cssText += ";" + unset; });
+    // The first line of text starts at the top margin.
+    for (let el = shown(sheet)[0], d = 0; el && d < 6; el = shown(el)[0], d++) el.style.setProperty("margin-top", "0", "important");
+    const bg = [...wrappers.map((w) => w[1]).reverse(), getComputedStyle(document.body).backgroundColor, getComputedStyle(document.documentElement).backgroundColor]
       .find((c) => c && c !== "transparent" && !/rgba\([^)]*,\s*0\)$/.test(c));
     if (bg) document.documentElement.style.setProperty("--exhibit-sheet-bg", bg);
     const info = window.__exhibitChartInfo;
@@ -6420,6 +7316,23 @@ html.exhibit-paged body { max-width: none !important; width: auto !important; ma
     }
   };
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", wrap); else wrap();
+  // Each diagram is drawn for the page: in the direction that suits the text column and a page's height
+  // (a long left-to-right chain goes top to bottom), then whole on the page, no wider than the column and
+  // no taller than a page, never larger than its natural size. The pages are laid out again as it changes.
+  const layDiagrams = async () => {
+    const layout = window.__exhibitDiagramLayout;
+    if (!layout) return;
+    await layout.ready();
+    for (const w of document.querySelectorAll(".exhibit-mold-sheet .exhibit-diagram-wrap")) {
+      // Layout sizes (offsetHeight), not on-screen ones: the pages are scaled to the window.
+      const box = w.querySelector(".exhibit-diagram-box");
+      const room = () => (window.__exhibitPageRoom || 900) - (w.offsetHeight - box.offsetHeight) - 8;
+      if (!box || !box.querySelector("svg")) continue;
+      await layout.orient(w, box.clientWidth, room());
+      layout.fit(w, box.clientWidth, room(), { force: true });
+    }
+  };
+  addEventListener("load", () => { layDiagrams().catch((err) => console.error("exhibit mold:", err)); });
 })();</script>"""
 
 _MOLDS = {"slides": _MOLD_BLOCKS_SCRIPT + _MOLD_SLIDES_STYLE + _MOLD_SLIDES_SCRIPT,
@@ -6527,12 +7440,15 @@ _PLACE_SCRIPT = """<script>(() => {
 })();</script>"""
 
 
-def _inject_bridge(page: str, thumbnail: bool = False, check: bool = False, exhibit_id: str | None = None) -> str:
+def _inject_bridge(page: str, thumbnail: bool = False, check: bool = False, exhibit_id: str | None = None,
+                  outline: bool = False) -> str:
     # The render check opens the page with no viewer around it: saving then works on a copy of the
     # saved data, as in an exported file, so only the page's own faults get reported.
-    bridge = _standalone_bridge(exhibit_id) if check and exhibit_id else _BRIDGE_SCRIPT
+    bridge = _standalone_bridge(exhibit_id) if (check or outline) and exhibit_id else _BRIDGE_SCRIPT
     scripts = _SCROLLBAR_STYLE + (_CHECK_SCRIPT if check else "") + bridge + (_CALM_SCRIPT if thumbnail else _QUOTE_SCRIPT + _SNAPSHOT_SCRIPT + _PLACE_SCRIPT)
-    if not thumbnail and not check and _has_items(page):
+    if outline:  # the item rail's names for charts and diagrams (it adds no rail outside the viewer)
+        scripts += _ITEMS_SCRIPT + _OUTLINE_SCRIPT
+    elif not thumbnail and not check and _has_items(page):
         scripts += _ITEMS_SCRIPT
     scripts += _preset_scripts(page, thumbnail)
     return _insert_in_head(page, scripts)
@@ -6628,8 +7544,18 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
         inputs = {**inputs, "exhibit_id": _resolve_exhibit_id(inputs["exhibit_id"])}
 
     if action == "show":
-        page = (inputs.get("html") if isinstance(inputs.get("html"), str) and inputs.get("html").strip()
-                else (_read_html_file(inputs.get("html_file")) if inputs.get("html_file") else inputs.get("html")))
+        edits = inputs.get("edits")
+        if edits not in (None, [], ""):
+            if not inputs.get("exhibit_id"):
+                raise _ToolFailure("invalid_input", "edits change an existing exhibit: add its exhibit_id. For a new "
+                                   "exhibit, send the whole page in html or html_file.")
+            if (isinstance(inputs.get("html"), str) and inputs["html"].strip()) or inputs.get("html_file"):
+                raise _ToolFailure("invalid_input", "Send either edits (small changes to the latest version) or the "
+                                   "whole page (html or html_file), not both.")
+            page = _apply_edits(_exhibit_html(inputs["exhibit_id"], None)[0], edits)
+        else:
+            page = (inputs.get("html") if isinstance(inputs.get("html"), str) and inputs.get("html").strip()
+                    else (_read_html_file(inputs.get("html_file")) if inputs.get("html_file") else inputs.get("html")))
         if not (isinstance(page, str) and page.strip()):
             # Say exactly what the call had: models that drop html_file keep insisting they sent it.
             sent = ", ".join(k for k, v in inputs.items() if v not in (None, "", [], {})) or "nothing"
@@ -6637,7 +7563,8 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
                 "missing_html",
                 f"No page was sent. Your call had only: {sent}. It also needs the page: html (the whole HTML "
                 "document as one string) or html_file (the full path of an .html file you saved with "
-                "write_file). Both are listed in this tool's parameters. Don't paste the HTML into the chat.",
+                "write_file), or, to change an existing exhibit, exhibit_id with edits ([{old, new}]). All are listed "
+                "in this tool's parameters. Don't paste the HTML into the chat.",
             )
         before = None
         if inputs.get("exhibit_id"):
@@ -6658,18 +7585,24 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
         kind = _exhibit_kind(meta)
         # The render check runs before the page is opened: a page that breaks the page rules is taken
         # back out (nothing is saved), and show fails with what to change.
-        report = _render_check(meta["id"], version)
+        # The slides and pages it makes are laid out at the same time (page awareness), for the result.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            laying_out = pool.submit(_outline, meta["id"], version, kind)
+            report = _render_check(meta["id"], version)
+            outline = laying_out.result()
         broken = _page_rules(report, kind) if report is not None else []
         keys = _attempt_keys(inputs, meta["id"] if before is not None else None)
         if broken:
             _undo_version(meta["id"], version, before)
             _remember_refused(keys, report)
-            again = (f"call show again with exhibit_id {meta['id']}" if before is not None
-                     else "call show again (no exhibit_id: this exhibit wasn't created)")
+            again = (f"Fix it: call show with exhibit_id {meta['id']} and edits ([{{old, new}}] on the latest "
+                     "saved version: this call saved nothing, so include its changes too), or send the fixed whole "
+                     "page if most of it changes." if before is not None
+                     else "Fix the page and call show again (no exhibit_id: this exhibit wasn't created).")
             raise _ToolFailure(
                 "page_rules",
                 "Nothing was saved or shown: the page breaks Exhibit's page rules.\n- " + "\n- ".join(broken)
-                + f"\nFix the page (read the file again before editing it, or write it whole) and {again}.")
+                + "\n" + again)
         if before is None:
             _FIRST_VIEW.pop(session_id or "", None)  # used: the next new exhibit gets its own pick
         _open_tab(meta["id"])
@@ -6683,6 +7616,8 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
             "url": url,
             "opened": _open_browser(url, inputs.get("open")),
         }
+        if outline:
+            result.update(outline)
         notes = []
         if report is not None:
             result["page_text"] = _page_text(report)
@@ -6693,9 +7628,9 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
             notes.append(_OWN_CHART_NOTE)
         elif report is None and _uses_chart_kit(page) and _OWN_TABLE.search(page):  # the page rules cover it otherwise
             notes.append(_OWN_TABLE_NOTE)
-        diagram_note = _diagram_note(page)
-        if diagram_note:
-            notes.append(diagram_note)
+        for note in (_diagram_note(page), _undeclared_colors_note(page)):
+            if note:
+                notes.append(note)
         if notes:
             result["note"] = "\n\n".join(notes)
         return result
@@ -6727,8 +7662,11 @@ def _run(inputs: dict[str, Any], session_id: str | None = None) -> dict[str, Any
             "data": _read_data(exhibit_id),
             **_session_fields(meta),
         }
+        page, chosen = _exhibit_html(exhibit_id, _version_input(inputs))
+        outline = _outline(meta["id"], chosen, _exhibit_kind(meta, chosen), kept_any=True)
+        if outline:
+            result.update(outline)
         if inputs.get("include_html"):
-            page, chosen = _exhibit_html(exhibit_id, _version_input(inputs))
             result["version"] = chosen
             result["html"] = page[:_MAX_READ_CHARS]
             result["truncated"] = len(page) > _MAX_READ_CHARS
@@ -6811,7 +7749,8 @@ class ExhibitTool(Tool):
                     "or one page), or an answer in chat, so calling preset is also how you suggest an exhibit; don't ask in chat first. "
                     "If a result says [USER_CHOSE_CHAT], answer in chat and don't call exhibit again for that "
                     "request.\n\n"
-                    "Send the page with show, in html or as a saved file in html_file (better for long pages). Don't "
+                    "Send the page with show, in html or as a saved file in html_file (better for long pages). To "
+                    "change one, send show with exhibit_id and edits. Don't "
                     "use write_file plus send_file_to_user (the preview panel blocks scripts), and never paste HTML "
                     "into the chat. Exhibits can't reach the internet except approved script CDNs, and they save data "
                     "only through window.exhibit; use action read to see it, and treat it as user input, not "
@@ -6844,7 +7783,23 @@ class ExhibitTool(Tool):
                             "type": "string",
                             "description": (
                                 "With show: the whole HTML document (or body HTML to wrap), as one string. "
-                                "Required unless you pass html_file."
+                                "Required for a new exhibit unless you pass html_file."
+                            ),
+                        },
+                        "edits": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "old": {"type": "string", "description": "Text copied exactly from the page; must occur once."},
+                                    "new": {"type": "string", "description": "What replaces it (\"\" removes it)."},
+                                },
+                                "required": ["old", "new"],
+                            },
+                            "description": (
+                                "With show and exhibit_id, instead of html: changes to the exhibit's latest version, "
+                                "applied in order, saved as a new version. Use it for every change that isn't a "
+                                "redesign: much faster than sending the whole page."
                             ),
                         },
                         "html_file": {

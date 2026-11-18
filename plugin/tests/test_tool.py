@@ -12,6 +12,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -75,6 +76,55 @@ class ExhibitToolTests(unittest.TestCase):
         # Progressive tool loading hides tools that don't declare an exposure.
         self.assertIsNotNone(MOD.ToolExposure)
         self.assertEqual(self.tool.card.exposure, MOD.ToolExposure.DIRECT)
+
+    # Edits (0.4.2) ------------------------------------------------------------
+    def test_show_edits_change_the_latest_version(self):
+        # 0.4.2: ~85% of user-asked changes rewrote the whole page (median 13.6k chars, about a minute).
+        # show takes edits on the saved page instead, like str_replace: no file round-trip, any chat.
+        first = self.show(html="<h1>Packing list</h1>\n<ul>\n  <li>Umbrella</li>\n</ul>")
+        xid = first["exhibit_id"]
+        edited = self.call(action="show", exhibit_id=xid, edits=[
+            {"old": "<h1>Packing list</h1>", "new": "<h1>Beach packing list</h1>"},
+            {"old": "<ul> <li>Umbrella</li>", "new": "<ul>\n  <li>Umbrella</li>\n  <li>Sunscreen</li>"},  # whitespace differs
+        ])
+        self.assertTrue(edited["success"], edited)
+        self.assertEqual(edited["version"], 2)
+        page = MOD._exhibit_html(xid, None)[0]
+        self.assertIn("<h1>Beach packing list</h1>", page)
+        self.assertIn("<li>Sunscreen</li>", page)
+        self.assertEqual(page.count("<!doctype html>"), 1)  # the stored page isn't wrapped twice
+
+    def test_show_edits_that_miss_save_nothing_and_say_why(self):
+        xid = self.show(html="<p>Rent is 1500 a month.</p><p>Food</p><p>Food</p>")["exhibit_id"]
+        cases = (
+            ([{"old": "Rent is 1600 a month", "new": "x"}], "edit_not_found", "first 2 words"),
+            ([{"old": "<p>Food</p>", "new": "x"}], "edit_not_unique", "occurs 2 times"),
+            ([{"old": "Rent", "new": "Lease"}, {"old": "Rent", "new": "x"}], "edit_not_found", "edit 2"),
+            ([{"old": "", "new": "x"}], "invalid_input", "Edit 1 needs"),
+            ([], None, None),
+        )
+        for edits, code, text in cases:
+            result = self.call(action="show", exhibit_id=xid, edits=edits)
+            if code is None:
+                self.assertEqual(result["error_code"], "missing_html")  # an empty list is no edits
+                continue
+            self.assertEqual((result["success"], result["error_code"]), (False, code), result)
+            self.assertIn(text, result["error"] if "error" in result else str(result))
+        self.assertEqual(len(MOD._load_meta(xid)["versions"]), 1)
+        both = self.call(action="show", exhibit_id=xid, html="<p>x</p>", edits=[{"old": "Food", "new": "y"}])
+        self.assertEqual(both["error_code"], "invalid_input")
+        new = self.call(action="show", title="New", edits=[{"old": "a", "new": "b"}])
+        self.assertEqual(new["error_code"], "invalid_input")
+        self.assertIn("edits", self.tool.card.input_params["properties"])
+        # Some models send the list as a JSON string.
+        as_text = self.call(action="show", exhibit_id=xid, edits=json.dumps([{"old": "Rent is 1500", "new": "Rent is 1600"}]))
+        self.assertTrue(as_text["success"], as_text)
+        # A long old text that drifted is found by its longest matching start, without one search per word.
+        long_old = "Rent is 1600 " + " ".join(f"w{i}" for i in range(2000))
+        with mock.patch.object(MOD.re, "search", wraps=MOD.re.search) as searched:
+            miss = self.call(action="show", exhibit_id=xid, edits=[{"old": long_old, "new": "x"}])
+        self.assertIn("first 3 words", miss["error"])
+        self.assertLess(searched.call_count, 30)
 
     # Presets -----------------------------------------------------------------
     def test_preset_sets_the_view_a_new_exhibit_opens_in(self):
@@ -800,6 +850,108 @@ class ExhibitToolTests(unittest.TestCase):
         with self.assertRaises(MOD._ToolFailure):
             MOD._export_pdf(shown["exhibit_id"], None, mold="poster")
 
+    def test_slides_mold_shrinks_slides_with_a_transform_not_zoom(self):
+        # Under CSS zoom, ECharts read the mouse at zoom times its real position and hovered the wrong bar
+        # (0.4.2); a transform is mapped back by the browser.
+        script = MOD._MOLD_SLIDES_SCRIPT
+        self.assertNotIn("style.zoom", script)
+        self.assertIn('body.style.transform = "scale(" + k + ")"', script)
+
+    def test_views_lay_diagrams_out_for_their_box(self):
+        # 0.4.2: a diagram drawn for the page was squeezed onto slides (a tall flowchart at 7 px labels on a
+        # "(continued)" slide). The Slides and Document views turn it to the direction that fits and size it
+        # to the room left, through the diagram kit; Mermaid measures inside the diagram, since the Slides
+        # view hides the rest of <body> (redrawn diagrams came out empty).
+        kit = MOD._DIAGRAM_KIT_SCRIPT
+        self.assertIn("window.__exhibitDiagramLayout = {", kit)
+        self.assertIn("mermaid.render(id, source, scratch)", kit)
+        for mold in ("slides", "document"):
+            self.assertIn("layout.orient(", MOD._MOLDS[mold])
+            self.assertIn("layout.fit(", MOD._MOLDS[mold])
+
+    def test_document_pages_fit_blocks_too_big_for_a_page(self):
+        # 0.4.2: in the Document view, a card taller than a page ran through the page gap, an inline <svg>
+        # (no offsetTop) was never moved off a page break, and wide or tall blocks ran past the margins.
+        # Blocks are measured by their box on screen, cards break between their children, and blocks
+        # too wide or tall are shrunk to fit (a transform on screen, zoom on paper, so a PDF's pages match).
+        script = MOD._DOCUMENT_SCRIPT
+        self.assertNotIn("n.offsetTop", script)
+        self.assertIn("isContainer(child) || breakable(child)", script)
+        self.assertIn("fitWidth(list);", script)
+        self.assertIn('el.style.setProperty("zoom", String(k), "important");', script)
+        self.assertIn('"translateX(" + dx + "px) scale(" + k + ")"', script)
+
+    def test_chart_kit_draws_what_each_type_is_read_by(self):
+        # 0.4.2 testing: a waterfall was bare bars (read as broken), a funnel's last label was white on the page,
+        # the radar's bottom axis name was cut off, the calendar was a thin strip, the treemap showed a path bar.
+        kit = MOD._CHART_KIT_SCRIPT
+        self.assertIn("signed(change, total)", kit)  # a value on every waterfall bar
+        self.assertIn("lineDash: [3, 3]", kit)  # connectors between steps
+        self.assertIn("i === 0 && spec.start ? [i, 0, c, c, 1]", kit)  # start: true is a total bar
+        self.assertIn("% of previous", kit)  # funnel drop-off
+        self.assertIn('position: "right", color: t.fg', kit)  # narrow funnel stages label beside them
+        self.assertIn("const calendarPlan = ", kit)
+        self.assertIn('nodeClick: zooms ? "zoomToNode" : false', kit)
+        self.assertIn("start: true", (Path(MOD.__file__).parents[1] / "skills" / "exhibit" / "SKILL.md").read_text(encoding="utf-8"))
+
+    def test_diagram_kit_colours_every_type(self):
+        # 0.4.2 testing: Mermaid turns primary, secondary and tertiary into each type's colour set, and the kit
+        # set secondary and tertiary to white, so mind map branches, Venn sets and timeline periods came out
+        # white or grey; neo borders faded to white. The diagrams get the chart kit's palette as tints, rules for
+        # what the theme doesn't reach, and empty space around a drawing is cut off.
+        kit = MOD._diagram_kit_script()
+        self.assertIn(json.dumps(MOD._PALETTE), kit)
+        self.assertIn(json.dumps(MOD._PALETTE), MOD._CHART_KIT_SCRIPT)
+        self.assertIn('["cScale" + i]: tint(c)', kit)
+        self.assertIn('["venn" + (i + 1)]: solid(c)', kit)
+        self.assertIn("secondaryBorderColor: accent", kit)
+        self.assertIn('const s = "g[data-look].section-" + (i - 1);', kit)  # mind map branches, timeline periods
+        self.assertIn('"circle.actor-" + i', kit)  # journey actors
+        self.assertIn("themeCSS: t.css", kit)
+        self.assertIn("block: { padding: 24 }", kit)
+        self.assertIn("tidy(el);", kit)
+        # A fresh install loads libraries from the CDN until its copy is there: not an error for the check.
+        self.assertIn('s.dataset.exhibitLib = "";', MOD._LIB_LOADER_SCRIPT)
+        self.assertIn('t.hasAttribute("data-exhibit-lib")', MOD._CHECK_SCRIPT)
+
+    def test_browser_runs_without_a_compatibility_layer(self):
+        # 0.4.2: with __COMPAT_LAYER=DetectorsAppHealth inherited from a parent app, Edge relaunched itself,
+        # --dump-dom's output was lost and every render check silently reported nothing.
+        with mock.patch.dict(os.environ, {"__COMPAT_LAYER": "DetectorsAppHealth"}):
+            self.assertNotIn("__COMPAT_LAYER", MOD._browser_env())
+            self.assertEqual(MOD._browser_env().get("EXHIBIT_HOME"), self.tmp.name)
+
+    def test_slides_give_a_picture_room_before_its_text(self):
+        # 0.4.2 testing: a mind map kept with its slide's callout was drawn at 3.8 px labels (8 px alone), and a
+        # diagram left to its width grew with a shrunk slide and pushed its step controls off it. Text after (or
+        # long text before) the picture moves to a "(continued)" slide when it costs the picture over 15%, and
+        # the picture is always sized to its room.
+        script = MOD._MOLD_SLIDES_SCRIPT
+        self.assertIn("const PICTURE_GIVE = 0.15;", script)
+        self.assertIn("moveOn(s, kids.slice(at + 1));", script)
+        self.assertIn("moveOn(s, kids.slice(from));", script)
+        self.assertIn("textAt(wrap, width, height, opts = {})", MOD._DIAGRAM_KIT_SCRIPT)
+
+    def test_document_pages_have_one_margin_standard(self):
+        # 0.4.2: side margins were 64, 80 or 113 px depending on the page's own wrapper, and pages ended a
+        # paragraph early (bottoms 84-380 px). Now 1 in all round, the page's outer wrappers give way to it,
+        # paragraphs split at a line (2 lines each side), and a heading's lead-in goes with its figure.
+        script = MOD._DOCUMENT_SCRIPT
+        self.assertIn("MT = 96, MS = 96, MB = 96", script)
+        self.assertIn("const rest = split(el, (page + 1) * H - MB);", script)
+        self.assertIn("leadIn(list[i - 1])", script)
+        self.assertIn("unsplitAll();", script)
+        style = MOD._MOLD_DOCUMENT_STYLE
+        self.assertIn("orphans: 2; widows: 2;", style)
+        self.assertIn("wrappers.forEach(([el]) => { el.style.cssText += \";\" + unset; });", style)
+
+    def test_check_note_names_diagrams_too_big_for_a_view(self):
+        note = MOD._check_note({"views": [{"name": "Diagram 2", "slides": 3, "document": 6.1},
+                                          {"name": "Diagram 3", "slides": 7.6, "document": 14}]})
+        self.assertIn("Diagram 2 is too big to read in the Slides view (3 px) and the Document view (6.1 px)", note)
+        self.assertIn("Diagram 3 is too big to read in the Slides view (7.6 px), even", note)
+        self.assertIsNone(MOD._check_note({"views": [{"name": "Diagram 1", "slides": 9.5, "document": 12}]}))
+
     @unittest.skipUnless(MOD._pdf_browser(), "needs Edge or Chrome")
     def test_slides_mold_splits_a_freeform_page_like_pandoc(self):
         # Pandoc's rules: the first <h1> and a paragraph after it are the title slide; each <h2> (the slide
@@ -1258,7 +1410,7 @@ class ExhibitToolTests(unittest.TestCase):
         kit = MOD._diagram_kit_script()
         # The agent's Mermaid is drawn as written: mistakes come back from show's render check instead
         # of being patched per diagram type.
-        self.assertIn("mermaid.render(d.renderId, d.source)", kit)
+        self.assertIn("drawIn(d, mermaid, d.renderId, d.source)", kit)
         self.assertNotIn("forMermaid", kit)
         # The source block never takes space, whatever the page's CSS gives it.
         self.assertIn("pre.exhibit-diagram{display:none!important}", kit)
@@ -1287,7 +1439,7 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn("Script error: boom (line 3)", note)
         small = MOD._check_note({"errors": [], "diagrams": [{"state": "drawn"}], "small": [{"name": "Diagram 1", "px": 7.5}]})
         self.assertIn("Diagram 1 has text drawn at 7.5 px in a 1280 px wide window, too small to read.", small)
-        self.assertIn("call show again with this exhibit_id", note)
+        self.assertIn("call show with this exhibit_id and edits", note)
         self.assertEqual(MOD._page_text({"text": "  A \n\n\n B  "}), "A\nB")
         self.assertTrue(MOD._page_text({"text": "x" * 5000}).endswith(" …"))
         skill = (TOOL_FILE.parents[1] / "skills" / "exhibit" / "SKILL.md").read_text(encoding="utf-8")
@@ -1490,6 +1642,69 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIsNone(MOD._layout_note({"layout": {"column": 1000, "window": 1280}}, "freeform"))
         self.assertIn("and 2 more", MOD._quote_list(["a", "b", "c", "d", "e"]))
 
+    def test_chart_options_merge_series_by_position(self):
+        # 0.4.2 testing (Café sales): options: {series: [{areaStyle: {}}]} replaced the kit's series, data and all,
+        # and the chart drew empty. Lists of settings objects merge item by item, as ECharts' setOption does, and
+        # options that still leave no data are reported for the render check.
+        kit = MOD._CHART_KIT_SCRIPT
+        self.assertIn("return [...b.map((item, i) => merge(a[i], item)), ...a.slice(b.length)];", kit)
+        self.assertIn("its options replaced the chart's data", kit)
+
+    def test_pages_get_the_skill_colours_they_draw_with(self):
+        # 0.4.2 testing (Office perk satisfaction): an SVG drew with var(--fg) and var(--line) in a page with no
+        # :root block, so its axes and grid vanished. Pages get the skill's light colours at zero specificity,
+        # and show tells the agent to declare them.
+        page = '<svg viewBox="0 0 10 10"><line stroke="var(--line)"/><text fill="var(--fg, #000)">x</text></svg>'
+        self.assertIn(":where(:root){--bg:#ffffff;--fg:#1d1d1b", MOD._preset_scripts(page, False))
+        skill = (TOOL_FILE.parents[1] / "skills" / "exhibit" / "SKILL.md").read_text(encoding="utf-8")
+        for pair in MOD._SKILL_COLORS.split(";"):  # the same light colours the skill gives
+            self.assertIn(pair + ";", next(line for line in skill.splitlines() if line.startswith(":root { --bg")))
+        note = self.show(html=page).get("note", "")
+        self.assertIn("never declares (--line)", note)  # --fg has a fallback
+        self.assertIsNone(MOD._undeclared_colors_note("<style>:root{--line:#ddd}</style>" + page))
+
+    def test_read_uses_a_kept_outline_and_never_lays_out_twice(self):
+        # Audit, 0.4.2: read laid the page out in headless browsers after every plugin update, and again on
+        # every read when a layout failed. read takes any kept outline (an earlier build's too), and a failed
+        # layout is kept as such.
+        xid = self.show(html="<h2>A</h2><p>x</p>")["exhibit_id"]
+        folder = MOD._exhibit_dir(xid)
+        (folder / "outline-v1.json").write_text(json.dumps({"build": "old", "outline": {"slides": [{"slide": 1, "title": "A"}]}}))
+        os.environ.pop("EXHIBIT_NO_RENDER_CHECK", None)
+        with mock.patch.object(MOD, "_headless_dom", side_effect=AssertionError("laid out again")):
+            self.assertEqual(self.call(action="read", exhibit_id=xid)["slides"], [{"slide": 1, "title": "A"}])
+            (folder / "outline-v1.json").write_text(json.dumps({"build": "old", "outline": None}))
+            self.assertNotIn("slides", self.call(action="read", exhibit_id=xid))
+        # show lays a new version out for the build and look it runs with.
+        self.assertIn("_page_version", MOD._outline.__code__.co_names)
+
+    def test_show_and_read_say_what_is_on_each_slide_and_page(self):
+        # 0.4.2, page awareness: the views cut the page into slides and pages in the browser, so agents couldn't
+        # write to a slide count or find "the chart on page 3". show lays the page out in both views and says
+        # what is on each; read returns the same, kept with the version.
+        if MOD._pdf_browser() is None:
+            self.skipTest("needs Edge or Chrome")
+        os.environ.pop("EXHIBIT_NO_RENDER_CHECK", None)
+        words = " ".join(["plans"] * 900)
+        page = ("<h1>Report</h1><p>Short intro.</p><h2>Costs</h2><p>Spending went up.</p>"
+                '<pre class="exhibit-diagram" data-name="Approval flow">flowchart LR\n A --> B</pre>'
+                f"<h2>Detail</h2><p>{words}</p><h2>Next steps</h2><p>Hire two people.</p>")
+        shown = self.show(html=page)
+        slides, pages = shown["slides"], shown["pages"]
+        self.assertEqual([s["title"] for s in slides][:3], ["Report", "Costs", "Detail"])
+        self.assertEqual(slides[0]["kind"], "title")
+        self.assertIn("diagram: Approval flow", slides[1]["has"])  # the Slides view moves the drawing from its source
+        self.assertGreaterEqual(len(pages), 2)
+        self.assertIn("diagram: Approval flow", pages[0]["has"])
+        self.assertTrue(any(p.get("continues") == "Detail" for p in pages[1:]), pages)
+        # Quotes and the item rail's references from those views name the slide or page.
+        self.assertIn("window.__exhibitWhere = (el, top) =>", MOD._QUOTE_SCRIPT)
+        self.assertIn("where: window.__exhibitWhere(range.startContainer, first.top)", MOD._QUOTE_SCRIPT)
+        self.assertIn('", " + where.kind + " " + where.n', TOOL_FILE.read_text(encoding="utf-8"))  # referenceFor in the viewer
+        read = self.call(action="read", exhibit_id=shown["exhibit_id"])
+        self.assertEqual((read["slides"], read["pages"]), (slides, pages))
+        self.assertTrue((MOD._exhibit_dir(shown["exhibit_id"]) / "outline-v1.json").is_file())
+
     def test_page_rules_in_a_real_browser(self):
         if MOD._pdf_browser() is None:
             self.skipTest("needs Edge or Chrome")
@@ -1509,7 +1724,7 @@ class ExhibitToolTests(unittest.TestCase):
         # An existing one keeps its versions and title.
         first = self.show(html="<h1>Scores</h1><p>Plain text.</p>")
         message = refused(html="<h1>Scores</h1>" + table, exhibit_id=first["exhibit_id"], title="Renamed")
-        self.assertIn(f"call show again with exhibit_id {first['exhibit_id']}", message)
+        self.assertIn(f"call show with exhibit_id {first['exhibit_id']} and edits", message)
         meta = MOD._load_meta(first["exhibit_id"])
         self.assertEqual((len(meta["versions"]), meta["title"]), (1, "Test exhibit"))
         self.assertFalse((MOD._exhibit_dir(first["exhibit_id"]) / "v2.html").exists())

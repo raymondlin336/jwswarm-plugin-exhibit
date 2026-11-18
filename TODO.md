@@ -1,6 +1,6 @@
 # Exhibit to-do
 
-Last updated 2026-11-10.
+Last updated 2026-11-18.
 
 ## Released
 
@@ -137,6 +137,13 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
 
 ## Next
 
+- [x] 0.4.2: version bumped and committed (2026-11-18); tag and push left to the user
+- [ ] Chart inconsistencies seen in the 0.4.2 chart gallery, not fixed: mixed number formats on one axis ("$5,000" next to "$10k"), donut decimals, a unit shown twice (TWh), box plot styling, sankey values
+- [ ] Mermaid, as Mermaid draws them (left as is): journey diagrams scroll sideways at readable size, gitGraph commit labels are slanted, the tree view shows a "/" root
+- [x] Page awareness in the Slides and Document views (found for 0.4.2). Agents couldn't honour "make me a 5-page doc / 8-slide deck" or find "the chart on page 3": the views cut the page in the browser and nothing told the agent the result. Notes in `0.4.2-issue5-page-awareness.md`.
+  - [x] `show` and `read` return `slides` and `pages` (2026-11-18): each slide's title, each page's headings, the charts, diagrams, tables and images on it, first words, word count, `continues`, `shrunk_to`. Laid out in a headless browser in every view the exhibit can be shown in, kept with the version
+  - [x] Skill: how slides and pages are cut, roughly what fits on a page, and to check the count against what the user asked for
+  - [x] Quotes and the item rail's references carry their slide or page ("@exhibit(Deck #ab12cd, slide 4)"); the rail tells the agent what is on it from the kept outline
 - [ ] Let the agent write an exhibit's saved data (refresh numbers without a new version)
 - [ ] Look into "Continue in chat" from an exhibit, which also hooks up the New exhibit page (built 2026-11-10: an ask box and the four formats with previews, not connected; needs WorkSwarm to let a plugin start a chat)
 - [ ] An exhibit button that sends a message to the agent (may wait for the core feature)

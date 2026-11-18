@@ -6,7 +6,7 @@ A WorkSwarm plugin that lets the agent answer with a page instead of a chat mess
 
 Similar to artifacts in Claude and canvas in ChatGPT and Gemini.
 
-**Status: 0.4.1** Recommended model: **deepseek-v4-pro**. It uses the prebuilt components where they fit and does better when it has to build its own. deepseek-v4-flash works, but uses the components less and its pages vary more.
+**Status: 0.4.2** Recommended model: **deepseek-v4-pro**. It uses the prebuilt components where they fit and does better when it has to build its own. deepseek-v4-flash works, but uses the components less and its pages vary more.
 
 ![The Exhibits Gallery](docs/gallery.webp)
 
@@ -193,4 +193,4 @@ Current limits:
 
 ## Build and install
 
-Download `exhibit-0.4.1.zip` and add it in WorkSwarm under Extensions.
+Download `exhibit-0.4.2.zip` and add it in WorkSwarm under Extensions.

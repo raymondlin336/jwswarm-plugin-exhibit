@@ -1,6 +1,6 @@
 # Exhibit (exhibit)
 
-**Version 0.4.1 (prototype)** · Recommended model: deepseek-v4-pro
+**Version 0.4.2 (prototype)** · Recommended model: deepseek-v4-pro
 
 Lets WorkSwarm build exhibits for you: interactive pages like reports, explainers, dashboards, calculators, checklists and small games, opened in a sandboxed browser tab. Each one can be read as a scrolling page, as slides or as document pages. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back.
 
@@ -37,6 +37,19 @@ Lets WorkSwarm build exhibits for you: interactive pages like reports, explainer
 - **Dependencies:** Python standard library only. The tool does nothing at import time.
 
 ## Updates
+
+### 0.4.2
+
+- **Improved Documents & Slides View:** 
+  - Added margins and size awareness for UI elements
+  - Added page awareness (both in regular chatting and in quotes) so agents can now edit elements when told a page / slide number
+  - Diagrams are now resizable when switching between views in order to use the space better
+- **Improvements / Bug Fixes:**
+  - Fixed issue where agent would sometimes unnecessarily rewrite entire pages when only small edits are needed
+  - Fixed issue where hoverable areas in charts in Slides view are misaligned with the visuals
+  - Fixed issue where large diagrams, elements and paragraphs ran past the margins or split between pages, or resized unreasonably
+  - Improved kit and presets for many less commonly used charts, graphs and diagrams
+  - Fixed issue where a fresh install reported "Couldn't load mermaid" while the libraries downloaded
 
 ### 0.4.1
 
