@@ -71,7 +71,7 @@ class FakeToolCall:
 
 SHOW_NEW = {"action": "show", "title": "Chart", "html": "<p>x</p>"}
 PRESET = {"action": "preset"}
-OPTIONS = ["Document", "Slides", "Freeform"]
+OPTIONS = ["Freeform", "Slides", "Document"]  # the viewer's order (0.4.3)
 
 
 class ExhibitAskRailTests(unittest.TestCase):
@@ -196,7 +196,7 @@ class ExhibitAskRailTests(unittest.TestCase):
         decision = self.resolve(**PRESET)
         self.assertEqual(decision.kind, "interrupt")
         (question,) = decision.request.questions
-        self.assertEqual([o["label"] for o in question["options"]], OPTIONS + ["Answer in chat"])
+        self.assertEqual([o["label"] for o in question["options"]], OPTIONS + ["None of the above"])
         self.assertEqual(question["question"], MOD._TEXT["en"]["preset_or_chat_question"])
         self.assertFalse(question["multi_select"])
 
@@ -255,29 +255,30 @@ class ExhibitAskRailTests(unittest.TestCase):
         (question,) = self.resolve(**PRESET).request.questions
         self.assertEqual([o["label"] for o in question["options"]], OPTIONS)  # chat isn't offered again
 
-    def test_agent_alternative_replaces_the_generic_chat_description(self):
+    def test_agent_alternative_is_passed_back_but_not_shown(self):
+        # 0.4.3: the option always says what it means; the agent still gets back the alternative it offered.
         self.turn("chart this data")
         args = dict(PRESET, chat_alternative="A static bar chart image   of the scores")
         (question,) = self.resolve(**args).request.questions
-        self.assertEqual(question["options"][-1]["description"], "A static bar chart image of the scores")
-        decision = self.resolve({"a": "Answer in chat"}, **args)
+        self.assertEqual(question["options"][-1]["description"], MOD._TEXT["en"]["chat_desc"])
+        decision = self.resolve({"a": "None of the above"}, **args)
         self.assertIn("you offered: A static bar chart image of the scores", decision.tool_result)
 
     def test_generic_chat_description_is_used_without_an_alternative(self):
         self.turn("chart this data")
         (question,) = self.resolve(**PRESET).request.questions
         self.assertEqual(question["options"][-1]["description"], MOD._TEXT["en"]["chat_desc"])
-        decision = self.resolve({"a": "Answer in chat"}, **PRESET)
+        decision = self.resolve({"a": "None of the above"}, **PRESET)
         self.assertNotIn("you offered", decision.tool_result)
 
     def test_long_alternative_is_trimmed(self):
         self.turn("chart this data")
-        (question,) = self.resolve(**dict(PRESET, chat_alternative="x" * 500)).request.questions
-        self.assertLessEqual(len(question["options"][-1]["description"]), MOD._MAX_ALTERNATIVE_CHARS)
+        decision = self.resolve({"a": "None of the above"}, **dict(PRESET, chat_alternative="x" * 500))
+        self.assertNotIn("x" * MOD._MAX_ALTERNATIVE_CHARS, decision.tool_result)
 
     def test_choosing_chat_rejects_and_blocks_retries_this_turn(self):
         self.turn("chart this data")
-        decision = self.resolve({"q": "Answer in chat"}, **PRESET)
+        decision = self.resolve({"q": "None of the above"}, **PRESET)
         self.assertEqual(decision.kind, "reject")
         self.assertTrue(decision.tool_result.startswith("[USER_CHOSE_CHAT]"))
         for args in (PRESET, SHOW_NEW):
@@ -310,7 +311,7 @@ class ExhibitAskRailTests(unittest.TestCase):
         self.assertEqual(self.resolve().kind, "approve")
         self.turn("chart the other table")
         (question,) = self.resolve(**PRESET).request.questions
-        self.assertIn("Answer in chat", [o["label"] for o in question["options"]])  # Skip isn't a lasting choice
+        self.assertIn("None of the above", [o["label"] for o in question["options"]])  # Skip isn't a lasting choice
 
     def test_cancel_button_cancels_and_blocks_retries_this_turn(self):
         self.turn("chart this data")
@@ -326,12 +327,15 @@ class ExhibitAskRailTests(unittest.TestCase):
 
     def test_preset_descriptions_say_how_the_exhibit_opens(self):
         # 0.4.1: the pick only sets the view a new exhibit opens in; there's no Charts & Graphs any more.
-        options = {o["label"]: o["description"] for o in MOD._question("en", False)["options"]}
-        self.assertEqual(options, {
-            "Document": "Opens as document pages, export as PDF",
-            "Slides": "Opens as a slide deck, export as PDF",
-            "Freeform": "Opens as one scrolling page; switch to slides or pages any time",
-        })
+        # 0.4.3: the question says it's how to view the exhibit, options in the viewer's order, "exportable as".
+        question = MOD._question("en", True)
+        self.assertEqual(question["question"], "How would you like to view this exhibit (you can change this later)?")
+        self.assertEqual([(o["label"], o["description"]) for o in question["options"]], [
+            ("Freeform", "Opens as one scrolling page, exportable as HTML or PNG"),
+            ("Slides", "Opens as a slide deck, exportable as PDF"),
+            ("Document", "Opens as document pages, exportable as PDF"),
+            ("None of the above", "Don't use an exhibit, respond with some other format, directly in chat"),
+        ])
 
     def test_our_dialogs_have_no_custom_option(self):
         # WorkSwarm adds "Other" (shown as "Custom") to every question with options; the rail wraps
@@ -367,7 +371,7 @@ class ExhibitAskRailTests(unittest.TestCase):
     def test_chinese_request_gets_chinese_options(self):
         self.turn("帮我把这个基准测试做成图表")
         (question,) = self.resolve(**PRESET).request.questions
-        self.assertEqual([o["label"] for o in question["options"]], ["文档", "幻灯片", "自由页面", "在对话中回答"])
+        self.assertEqual([o["label"] for o in question["options"]], ["自由页面", "幻灯片", "文档", "以上都不是"])
         self.assertEqual(self.resolve({"a": "幻灯片"}, **PRESET).kind, "approve")
 
     def test_resume_turn_keeps_state(self):

@@ -448,7 +448,7 @@ body.collapsed .panel { display:none; }
   border-radius:10px; background:var(--card); color:var(--fg); cursor:pointer; font-weight:600; }
 .new-btn:hover { background:var(--hover); }
 a.new-btn { text-decoration:none; }
-.new-btn.on { border-color:var(--accent); color:var(--accent); }
+.new-btn.on { border-color:#ff8821; color:#ff8821; }  /* WorkSwarm orange (0.4.3) */
 .new-btn svg { width:16px; height:16px; }
 .search { display:flex; align-items:center; gap:8px; border:1px solid var(--line); border-radius:10px;
   padding:0 12px; height:40px; width:320px; max-width:100%; background:var(--card); color:var(--muted); }
@@ -469,6 +469,12 @@ a.new-btn { text-decoration:none; }
   cursor:pointer; opacity:0; }
 .row:hover .x, .row:focus-within .x, .row.on .x { opacity:1; }
 .row .x:hover { background:var(--line2); color:var(--fg); }
+/* Pin and unpin from the column (0.4.3): shown on hover, and always when pinned (orange). */
+#tabs .row a { padding-right:58px; }
+.row .pin-btn { position:absolute; right:30px; top:50%; transform:translateY(-50%); width:22px; height:22px; border-radius:6px; opacity:0; }
+#pinned .row .pin-btn { right:6px; }
+.row .pin-btn svg { width:14px; height:14px; }
+.row:hover .pin-btn, .row:focus-within .pin-btn, .row .pin-btn.on { opacity:1; }
 .nav-row { display:flex; align-items:center; gap:10px; padding:8px; border-radius:8px; color:var(--fg);
   text-decoration:none; font-size:13.5px; }
 .nav-row:hover { background:var(--hover); }
@@ -497,9 +503,10 @@ main { flex:1; min-width:0; overflow-y:auto; }
 .thumb.mini { width:96px; height:60px; border:1px solid var(--line); border-radius:6px; }
 .thumb.mini iframe { width:1200%; height:1200%; transform:scale(.0834); }
 .file-name { font-size:14px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-/* What kind of exhibit: a blue document, red slides, or a grey icon for anything else. */
+/* What kind of exhibit: a blue document, red slides, an orange (WorkSwarm's) freeform page, grey otherwise. */
 .kind { display:inline-flex; flex:none; width:16px; height:16px; color:var(--muted); }
 .kind svg { width:100%; height:100%; }
+.kind-freeform { color:#ff8821; }
 .kind-document { color:#2563eb; }
 .kind-slides { color:#dc2626; }
 .kind-charts { color:#16a34a; }
@@ -531,7 +538,7 @@ main { flex:1; min-width:0; overflow-y:auto; }
   border-radius:8px; background:transparent; color:var(--muted); cursor:pointer; padding:0; }
 .pin-btn:hover { background:var(--hover); color:var(--fg); }
 .pin-btn svg { width:17px; height:17px; }
-.pin-btn.on { color:var(--accent); }
+.pin-btn.on { color:#ff8821; }  /* WorkSwarm orange (0.4.3) */
 .pin-btn.on svg { fill:currentColor; }
 .page-title { font-size:24px; margin:0 0 22px; }
 .pop-menu { position:fixed; min-width:170px; background:var(--card); border:1px solid var(--line); border-radius:10px;
@@ -540,6 +547,9 @@ main { flex:1; min-width:0; overflow-y:auto; }
   background:transparent; color:var(--fg); font-size:13px; text-align:left; cursor:pointer; }
 .pop-menu button:hover, .pop-menu button:focus-visible { background:var(--hover); outline:0; }
 .pop-menu button.danger { color:#dc2626; }
+.pop-menu button .mi { display:inline-flex; flex:none; width:16px; height:16px; color:var(--muted); }
+.pop-menu button .mi svg { width:100%; height:100%; }
+.pop-menu button.danger .mi { color:inherit; }
 .modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.35); display:flex; align-items:center;
   justify-content:center; z-index:30; }
 .modal { width:min(420px, calc(100vw - 32px)); background:var(--card); border:1px solid var(--line); border-radius:14px;
@@ -710,12 +720,18 @@ body.resizing iframe { pointer-events:none; }
 .ask textarea { width:100%; border:0; outline:0; resize:vertical; background:transparent; color:var(--fg); font:inherit; font-size:14.5px; min-height:64px; }
 .ask-foot { display:flex; align-items:center; gap:12px; margin-top:8px; }
 .ask-note { color:var(--muted); font-size:12.5px; flex:1; }
-.formats { display:grid; grid-template-columns:repeat(auto-fill, minmax(240px, 1fr)); gap:18px; }
-.format-card { text-align:left; font:inherit; cursor:pointer; padding:0; width:100%; }
-.format-card:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-.format-desc { color:var(--fg2); font-size:13px; margin-top:4px; }
-.blank-thumb { display:flex; align-items:center; justify-content:center; }
-.blank-thumb .kind { width:44px; height:44px; color:var(--muted); }
+/* What to do instead: the exhibits' own callout (ex-callout, from _PARTS_STYLE) in WorkSwarm's orange, and the
+   parts that don't work yet: greyed, barred, not clickable. */
+.new-page { --ex-accent:#ff8821; --ex-ink:#b85500; --ex-bg:var(--bg); --ex-fg:var(--fg); }
+@media (prefers-color-scheme: dark) { .new-page { --ex-ink:#ff8821; } }
+.new-page .ex-callout { max-width:760px; margin:6px 0 26px; font-size:14.5px; color:var(--fg2); }
+.new-page .ex-callout p { margin:6px 0 0; }
+.new-page .ex-callout p:first-child { margin:0; font-size:18px; line-height:1.35; color:var(--fg); }
+.unavailable { position:relative; }
+.unavailable .ask { position:relative; opacity:.55; filter:grayscale(1); cursor:not-allowed; pointer-events:none; }
+.unavailable .ask::after { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  background:repeating-linear-gradient(-45deg, transparent 0 10px, color-mix(in srgb, var(--fg) 9%, transparent) 10px 13px); }
+.unavailable textarea, .unavailable .btn { cursor:not-allowed; }
 @media (max-width:720px) { .page { padding:28px 20px 48px; } }
 """
 
@@ -784,17 +800,24 @@ _DOTS_ICON = (
     '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5.5" cy="12" r="1.6"/>'
     '<circle cx="12" cy="12" r="1.6"/><circle cx="18.5" cy="12" r="1.6"/></svg>'
 )
-_LINK_ICON = (
+# Copy reference and Quote (0.4.3): WorkSwarm's mark (the hexagon from its logo) in outline, for something you take
+# to the agent in a WorkSwarm chat. It was a chain link, which read as copying a web address.
+_AGENT_ICON = (
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
-    'stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/>'
-    '<path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></svg>'
+    'stroke-linejoin="round" aria-hidden="true"><path d="M12 20.4 5 16.4V7.6L12 3.6l7 4v8"/>'
+    '<circle cx="12" cy="11.9" r="2.7"/><path d="M14 13.8l5 1.8"/><g fill="currentColor" stroke="none">'
+    '<circle cx="12" cy="3.6" r="1.6"/><circle cx="5" cy="7.6" r="1.6"/><circle cx="19" cy="7.6" r="1.6"/>'
+    '<circle cx="5" cy="16.4" r="1.6"/><circle cx="19" cy="15.6" r="1.6"/><circle cx="12" cy="20.4" r="1.6"/></g></svg>'
 )
-# The New exhibit page's formats, in the picker's words (rails/exhibit_ask_rail.py).
-_NEW_PAGE_FORMATS = {
-    "document": ("Document", "Opens as document pages, export as PDF"),
-    "slides": ("Slides", "Opens as a slide deck, export as PDF"),
-    "freeform": ("Freeform", "Opens as one scrolling page; switch to slides or pages any time"),
-}
+
+
+def _panel_pin(exhibit_id: str, name: str, pinned: bool) -> str:
+    """The pin button on a row of the exhibits column (0.4.3); name is already escaped."""
+    label = "Unpin" if pinned else "Pin"
+    return (f'<button class="pin-btn{" on" if pinned else ""}" type="button" data-pin="{exhibit_id}" '
+            f'aria-pressed="{"true" if pinned else "false"}" aria-label="{label} {name}" title="{label}">{_PIN_ICON}</button>')
+
+
 _PENCIL_ICON = (
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
     'stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>'
@@ -808,12 +831,6 @@ _TRASH_ICON = (
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
     'stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16"/><path d="M9 7V4.8c0-.4.4-.8.8-.8h4.4c.4 0 .8.4.8.8V7"/>'
     '<path d="M6.5 7l.9 12.1c.1 1 .9 1.9 2 1.9h5.2c1.1 0 1.9-.9 2-1.9L17.5 7"/><path d="M10 11v6M14 11v6"/></svg>'
-)
-_QUOTE_ICON = (
-    '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 17.5c-.8-1-1.2-2.2-1.2-3.6 0-3.3 2.2-6.2 '
-    '5.6-7.7l.8 1.3c-2.1 1.2-3.2 2.7-3.4 4.3.3-.1.7-.2 1.1-.2 1.7 0 3 1.3 3 3s-1.4 3-3.1 3c-1.2 0-2.2-.4-2.8-1.1zm9.5 0'
-    'c-.8-1-1.2-2.2-1.2-3.6 0-3.3 2.2-6.2 5.6-7.7l.8 1.3c-2.1 1.2-3.2 2.7-3.4 4.3.3-.1.7-.2 1.1-.2 1.7 0 3 1.3 3 3s-1.4 '
-    '3-3.1 3c-1.2 0-2.2-.4-2.8-1.1z"/></svg>'
 )
 _SEARCH_ICON = (
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
@@ -844,7 +861,13 @@ function openMenu(button, actions) {
     const item = document.createElement("button");
     item.type = "button";
     item.setAttribute("role", "menuitem");
-    item.textContent = action.label;
+    if (action.icon) {  // an icon before the label (trusted markup: the plugin's own icons)
+      const icon = document.createElement("span");
+      icon.className = "mi";
+      icon.innerHTML = action.icon;
+      item.append(icon);
+    }
+    item.append(document.createTextNode(action.label));
     if (action.danger) item.className = "danger";
     item.addEventListener("click", () => { closeMenu(); action.run(); });
     itemMenu.append(item);
@@ -1830,6 +1853,7 @@ class _Handler(BaseHTTPRequestHandler):
             if _workswarm_logo() is not None
             else '<span class="rail-logo blank" aria-hidden="true"></span>'
         )
+        pins = _load_pins()
         rows = []
         for exhibit_id in reversed(_load_tabs()):  # most recently opened first
             try:
@@ -1841,13 +1865,13 @@ class _Handler(BaseHTTPRequestHandler):
             rows.append(
                 f'<div class="row{on}" title="{name}"><a href="{base}e/{exhibit_id}">'
                 f'{_kind_icon(_display_kind(meta))}<span class="lbl">{name}</span></a>'
+                f'{_panel_pin(exhibit_id, name, exhibit_id in pins)}'
                 f'<button class="x" data-close="{exhibit_id}" aria-label="Close {name}">&times;</button></div>'
             )
         everything = [
             {"id": m["id"], "title": m["title"], "summary": m.get("summary") or "", "kind": _display_kind(m)}
             for m in _list_exhibits()
         ]
-        pins = _load_pins()
         by_id = {e["id"]: e for e in everything}
         pinned_rows = []
         for exhibit_id in pins:
@@ -1858,11 +1882,13 @@ class _Handler(BaseHTTPRequestHandler):
             on = " on" if exhibit_id == current else ""
             pinned_rows.append(
                 f'<div class="row{on}" title="{name}"><a href="{base}e/{exhibit_id}">'
-                f'{_kind_icon(entry["kind"])}<span class="lbl">{name}</span></a></div>'
+                f'{_kind_icon(entry["kind"])}<span class="lbl">{name}</span></a>{_panel_pin(exhibit_id, name, True)}</div>'
             )
         icons = {kind: _kind_icon(kind) for kind in _KIND_ICONS}
         config = json.dumps(
-            {"base": base, "current": current, "all": everything, "icons": icons, "pins": pins}, ensure_ascii=False
+            {"base": base, "current": current, "all": everything, "icons": icons, "pins": pins, "pinIcon": _PIN_ICON,
+             "menuIcons": {"ref": _AGENT_ICON, "rename": _PENCIL_ICON, "delete": _TRASH_ICON}},
+            ensure_ascii=False
         ).replace("</", "<\\/")
         # Opening an exhibit collapses the column, giving the exhibit the room (the rail's Exhibits button
         # brings it back); elsewhere it's shown or hidden as the user left it.
@@ -1908,11 +1934,41 @@ function renderPinned() {{
     label.className = "lbl";
     label.textContent = e.title;
     link.append(label);
-    row.append(link);
+    const pin = document.createElement("button");
+    pin.type = "button"; pin.className = "pin-btn on"; pin.dataset.pin = e.id;
+    pin.innerHTML = config.pinIcon;  // our own markup
+    row.append(link, pin);
     list.append(row);
   }}
   document.getElementById("pinned-section").hidden = !list.children.length;
+  syncPins();
 }}
+// Pin buttons (the gallery's and the column's, 0.4.3): pressed, orange and labelled to match config.pins.
+function syncPins() {{
+  for (const button of document.querySelectorAll("[data-pin]")) {{
+    const on = config.pins.includes(button.dataset.pin);
+    const entry = config.all.find((e) => e.id === button.dataset.pin);
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-pressed", String(on));
+    button.title = on ? "Unpin" : "Pin";
+    button.setAttribute("aria-label", (on ? "Unpin " : "Pin ") + ((entry && entry.title) || ""));
+  }}
+}}
+document.addEventListener("click", async (e) => {{
+  const button = e.target.closest("[data-pin]");
+  if (!button) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const id = button.dataset.pin;
+  try {{
+    const r = await fetch(config.base + "api/tabs", {{ method: "PUT", headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{ op: "pin", id, pinned: !config.pins.includes(id) }}) }});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    config.pins = j.pins;
+    if (window.afterPins) window.afterPins(); else renderPinned();  // the gallery also reorders its cards
+  }} catch (err) {{ toast("Couldn’t change the pin: " + ((err && err.message) || err)); }}
+}});
 // Close a tab.
 document.addEventListener("click", async (event) => {{
   const button = event.target.closest("[data-close]");
@@ -2008,13 +2064,13 @@ if (config.current !== null) {{
 <span id="view-icon">{_kind_icon(icon_kind)}</span><input class="title-input" id="title" value="{title}" maxlength="{_MAX_TITLE_CHARS}" aria-label="Exhibit title" title="Rename" spellcheck="false">
 {switch}{_pager_markup(paged) if paged and not switch else ""}{versions}<button class="data-btn" id="data-btn" type="button" hidden aria-expanded="false" aria-controls="data-panel" title="Edit the data behind the charts">{_PENCIL_ICON}<span class="label">Edit data</span></button><div class="tools">
 <button class="bar-icon" id="export" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Export" title="Export">{_EXPORT_ICON}</button>
-<button class="bar-icon" id="copy-ref" type="button" aria-label="Copy reference" title="Copy reference (paste it into a WorkSwarm chat)">{_LINK_ICON}</button>
+<button class="bar-icon" id="copy-ref" type="button" aria-label="Copy reference" title="Copy reference (paste it into a WorkSwarm chat)">{_AGENT_ICON}</button>
 <button class="bar-icon danger" id="delete-exhibit" type="button" aria-label="Delete exhibit" title="Delete">{_TRASH_ICON}</button></div></header>
 <div class="vbody">{thumbs_panel}<iframe id="exhibit" title="{title}" sandbox="{_FRAME_SANDBOX}" src="{base}raw/{exhibit_id}/{chosen}?b={_page_version()}{"&view=" + view if view != "page" else ""}"></iframe>
 <div class="frame-loading" id="frame-loading" role="status" aria-label="Loading"><span class="spinner"></span></div>
 <div class="dp-resize" id="dp-resize" role="separator" aria-orientation="vertical" aria-label="Resize the Edit data panel" title="Drag to resize" tabindex="0" hidden></div>
 <aside class="data-panel" id="data-panel" aria-label="Edit data" hidden></aside></div></main>
-<button class="quote-btn" id="quote-btn" type="button" hidden>{_QUOTE_ICON}Quote</button>"""
+<button class="quote-btn" id="quote-btn" type="button" hidden>{_AGENT_ICON}Ask the Agent</button>"""
         printable = "true" if kind in ("document", "slides", "charts") else "false"
         raw_url = json.dumps(f"{base}raw/{exhibit_id}/{chosen}?b={_page_version()}")
         markdown = "true" if kind == "document" else "false"
@@ -2257,7 +2313,7 @@ window.addEventListener("message", async (event) => {{
 }});"""
         script += f"\nconst dataInBar = {'false' if items else 'true'};" + _DATA_PANEL_SCRIPT
         if items:
-            icons = json.dumps({"export": _EXPORT_ICON, "edit": _PENCIL_ICON, "ref": _LINK_ICON})
+            icons = json.dumps({"export": _EXPORT_ICON, "edit": _PENCIL_ICON, "ref": _AGENT_ICON})
             script += f"\nconst shownVersion = {chosen}, RAIL_ICONS = {icons};" + _ITEM_RAIL_SCRIPT
         if paged or switch:
             script += _VIEWER_PAGES_SCRIPT
@@ -2268,32 +2324,23 @@ window.addEventListener("message", async (event) => {{
                    "text/html; charset=utf-8", self._shell_csp(nonce))
 
     def _new_page(self) -> None:
-        """New exhibit: a box to ask WorkSwarm for one, and the formats to start from, with previews.
-        Not connected: a plugin can't start a WorkSwarm chat, so both say so when used."""
-        base = f"/{self.token}/"
-        cards = []
-        for kind, (name, description) in _NEW_PAGE_FORMATS.items():
-            thumb = f'<div class="thumb blank-thumb">{_kind_icon(kind)}</div>'
-            cards.append(
-                f'<button class="card format-card" type="button" data-kind="{kind}">{thumb}'
-                f'<div class="card-body"><div class="card-head">{_kind_icon(kind)}<div class="card-title">'
-                f'{html_lib.escape(name)}</div></div><div class="format-desc">{html_lib.escape(description)}</div></div></button>'
-            )
+        """New exhibit: a box to ask WorkSwarm for one. Not connected (a plugin can't start a WorkSwarm chat): a
+        notice says to ask in a WorkSwarm chat, and the box is shown disabled, greyed and barred (0.4.3). The
+        formats to start from were taken off: the format question in the chat does that."""
         main = f"""<main><div class="page new-page">
 <h1>New exhibit</h1>
-<p class="lede">Describe what you want and WorkSwarm makes it, or start from a format.</p>
-<section class="ask" aria-label="Ask WorkSwarm">
-<textarea id="ask-text" rows="3" placeholder="Describe the exhibit you want, for example: a chart of my monthly spending by category"></textarea>
-<div class="ask-foot"><span class="ask-note">Not connected yet: for now, ask for exhibits in a WorkSwarm chat.</span>
-<button class="btn primary" id="ask-start" type="button">Start in WorkSwarm</button></div>
+{_PARTS_STYLE}<aside class="ex-callout" role="note"><p><b>To make a new exhibit, ask for it in a WorkSwarm chat.</b></p>
+<p>For example: “Make an exhibit of my monthly spending by category.” WorkSwarm writes it, and it appears here.
+Starting one from this page isn’t available yet.</p></aside>
+<div class="unavailable" aria-disabled="true">
+<section class="ask" aria-label="Ask WorkSwarm (not available yet)">
+<textarea id="ask-text" rows="3" disabled placeholder="Describe the exhibit you want, for example: a chart of my monthly spending by category"></textarea>
+<div class="ask-foot"><span class="ask-note">Coming later</span>
+<button class="btn primary" id="ask-start" type="button" disabled>Start in WorkSwarm</button></div>
 </section>
-<h2>Start from a format</h2>
-<div class="formats">{"".join(cards)}</div>
+</div>
 </div></main>"""
-        script = """// Not connected: a plugin can't start a WorkSwarm chat or hand it a format.
-const notYet = "Not connected yet. For now, ask for an exhibit in a WorkSwarm chat and pick the format there.";
-document.getElementById("ask-start").addEventListener("click", () => toast(notYet));
-document.querySelectorAll(".format-card").forEach((card) => card.addEventListener("click", () => toast(notYet)));"""
+        script = """// Not connected: a plugin can't start a WorkSwarm chat, so the box here is disabled."""
         nonce = secrets.token_urlsafe(12)
         self._send(200, self._page("New exhibit", main, "new", nonce, script), "text/html; charset=utf-8",
                    self._shell_csp(nonce))
@@ -2427,11 +2474,11 @@ document.addEventListener("click", (e) => {
   e.preventDefault();
   const { id, title } = button.dataset;
   openMenu(button, [
-    { label: "Copy reference", run: () => copyReference(id, title) },
-    { label: "Rename", run: async () => {
+    { label: "Copy reference", icon: config.menuIcons.ref, run: () => copyReference(id, title) },
+    { label: "Rename", icon: config.menuIcons.rename, run: async () => {
       try { const result = await renameExhibit(id, title); if (result) applyRename(id, result.title); } catch (err) { fail(err); }
     } },
-    { label: "Delete", danger: true, run: async () => {
+    { label: "Delete", icon: config.menuIcons.delete, danger: true, run: async () => {
       try { if (await deleteExhibit(id, title)) applyDelete(id); } catch (err) { fail(err); }
     } },
   ]);
@@ -2446,31 +2493,10 @@ function applyPins() {
   for (const el of [...cards, ...rows]) el.style.order = place(el);
   cards.sort((a, b) => place(a) - place(b));
   rows.sort((a, b) => place(a) - place(b));
-  for (const button of document.querySelectorAll("[data-pin]")) {
-    const on = config.pins.includes(button.dataset.pin);
-    const entry = config.all.find((e) => e.id === button.dataset.pin);
-    button.classList.toggle("on", on);
-    button.setAttribute("aria-pressed", String(on));
-    button.title = on ? "Unpin" : "Pin";
-    button.setAttribute("aria-label", (on ? "Unpin " : "Pin ") + ((entry && entry.title) || ""));
-  }
-  renderPinned();
+  renderPinned();  // and the pin buttons everywhere (syncPins)
   layout();
 }
-document.addEventListener("click", async (e) => {
-  const button = e.target.closest("[data-pin]");
-  if (!button) return;
-  e.preventDefault();
-  const id = button.dataset.pin;
-  try {
-    const r = await fetch(config.base + "api/tabs", { method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ op: "pin", id, pinned: !config.pins.includes(id) }) });
-    const j = await r.json();
-    if (!r.ok) throw new Error(j.error);
-    config.pins = j.pins;
-    applyPins();
-  } catch (err) { fail(err); }
-});
+window.afterPins = applyPins;  // pinning (the column's handler, which also handles these cards' pins) reorders the cards
 new ResizeObserver(layout).observe(document.querySelector("main"));
 layout();
 // Thumbnails are live, read-only previews: they can load saved data, but nothing they write is kept.
@@ -6409,7 +6435,9 @@ _DOCUMENT_SCRIPT = """<script>(() => {
     report();
   };
   const fitToWindow = () => {
-    scale = Math.min(1, (document.documentElement.clientWidth - 32) / W);
+    // The body's width, not the window's: the item rail may keep a gutter at the right (data-exhibit-rail-room).
+    const room = (document.body && document.body.clientWidth) || document.documentElement.clientWidth;
+    scale = Math.min(1, (room - 32) / W);
     sheet.style.transform = "scale(" + scale + ")";
     stage.style.width = (W * scale) + "px";
     stage.style.height = (total * H * scale) + "px";
@@ -6793,6 +6821,13 @@ _ITEMS_SCRIPT = """<script>(() => {
     + "</style>";
   const layer = document.createElement("div");
   shadow.appendChild(layer);
+  // The rail's gutter: NEED is the rail's own width with its gap, GUTTER the room the page gives it.
+  const GUTTER = 56, NEED = 54;
+  const gutter = document.createElement("style");
+  gutter.setAttribute("data-exhibit-kit", "rail");
+  gutter.textContent = "html[data-exhibit-rail-room]{padding-right:" + GUTTER + "px!important}"
+    + "@media print{html[data-exhibit-rail-room]{padding-right:0!important}}";
+  (document.head || document.documentElement).appendChild(gutter);
   const cols = new Map();
   let editing = null, hinted = null;
   const outline = (it) => {
@@ -6851,7 +6886,20 @@ _ITEMS_SCRIPT = """<script>(() => {
     if (!host.isConnected) document.documentElement.appendChild(host);
     paint();
     const list = window.__exhibitItems().concat(textItems());
-    const right = contentRight(list), width = document.documentElement.clientWidth;
+    const width = document.documentElement.clientWidth;
+    let right = contentRight(list);
+    // No room right of the content (a narrow window: the content runs to its edge): the page makes room, a
+    // gutter at its right that the content gives way to, as a document editor's comment margin does, instead
+    // of the buttons being drawn over the content (0.4.3). Only while it's needed: it goes once the content,
+    // without the gutter, would leave room again (it widens by at most the gutter, hence the margin).
+    // Not in the Slides view: the slides keep room at their sides, and a gutter would narrow the page the
+    // slides are laid out from (6 slides became 7).
+    const room = document.documentElement.hasAttribute("data-exhibit-rail-room");
+    if (list.length && !window.__exhibitMoldView && (room ? right + GUTTER + NEED <= width : right + NEED > width)) {
+      document.documentElement.toggleAttribute("data-exhibit-rail-room", !room);
+      dispatchEvent(new Event("resize"));  // views that fit to the window (document pages) fit again
+      right = contentRight(list);
+    }
     const left = Math.max(0, Math.min(right + 12, width - 44)) + scrollX;
     const seen = new Set();
     let floor = -Infinity;  // groups of items side by side stack, with a gap, never on top of each other
@@ -6908,7 +6956,7 @@ _COPY_ICON = (
     '<path d="M15.5 8.5V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7.5a2 2 0 0 0 2 2h2.5"/></svg>'
 )
 _ITEMS_SCRIPT = _ITEMS_SCRIPT.replace("__ICONS__", json.dumps(
-    {"export": _EXPORT_ICON, "edit": _PENCIL_ICON, "ref": _LINK_ICON, "copy": _COPY_ICON}))
+    {"export": _EXPORT_ICON, "edit": _PENCIL_ICON, "ref": _AGENT_ICON, "copy": _COPY_ICON}))
 
 
 # Item export (PDF and HTML of one chart or diagram): the whole page, with everything but that item

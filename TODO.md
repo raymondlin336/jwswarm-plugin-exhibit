@@ -1,6 +1,6 @@
 # Exhibit to-do
 
-Last updated 2026-11-18.
+Last updated 2026-11-19.
 
 ## Released
 
@@ -92,11 +92,9 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
   - [ ] Try in WorkSwarm: does the agent pick parts for their jobs, and keep paragraphs the default? (End-game runs of 2026-11-12: it still builds its own cards for planet profiles, team roles and milestones.)
 - [x] Forms guidance (0.4.0, 2026-11-12): "Choosing the form" names drawn pictures (SVG, labelled, scale stated) and Gantt/timeline schedules, gives what the request asks to see its own section, and has varied examples (water cycle, kitchen renovation, coffee makers) outside the test topics. Charts take `better` and the render check notes unnamed value axes and lone score bars. Test prompts in the vault note "Exhibit quality test suite" (formerly "Exhibit end-game prompts").
   - First run on build 15:27: the solar system drew its planets and an age slider, the launch plan had a Gantt chart and a saved checklist, nutrition had the protein-vs-calories scatter.
-  - [ ] Gantt styling in the diagram kit: gridlines cross the task labels, bars read as empty outlines, and the red "today" line shows at the edge when today is outside the plan (hide it then; accent-filled bars; gridlines behind labels)
   - [ ] Render check: overlapping labels in the page's own SVGs (the solar system's inner planets: "MercuryVenusEarth", distances run together); measure text boxes like the small-text check and note collisions
   - [ ] Skill: `better` only where one direction is clearly better (scores, accuracy, savings: higher; cost, time, errors: lower); none for neutral measures like size, distance or counts (the solar system marked all four "higher is better")
   - [ ] Run E1–E6 two or three times each, and S1–S3, on the 0.4.0 release; record the range of forms per page
-  - [ ] Try a round on DeepSeek Pro to see how much of what's left is the model (layout of improvised pictures, home-made cards)
 - [ ] UI kit: a small set of ready-made parts for plain HTML, written into the plugin (no CDN, works offline, about 15 to 25 KB), with class names prefixed `ex-` and following the page's color variables.
   - Start with:
     - `exhibit.table(el, rows)`: sortable columns, search past about 15 rows, number formatting, and optional editable cells saved with the exhibit;
@@ -138,6 +136,8 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
 ## Next
 
 - [x] 0.4.2: version bumped and committed (2026-11-18); tag and push left to the user
+- [ ] Charts and diagrams made without the kits (seen 2026-11-19): some pages draw a graph or diagram another way (hand-made SVG, canvas, another library), so from the user's side some of them have no item buttons beside them (export, edit data, reference). Survey done 2026-11-19 (43 of 144 exhibits; candlesticks, striped bars and reference lines the agent wasn't sure options could do, live plots in simulations); the fix (buttons for the page's own drawings, a candlestick type, clearer options wording) is held for 0.4.4
+- [ ] Spacing that ignores how elements belong together (seen 2026-11-19): the views lay blocks out one by one, so a chart's or diagram's subtext (caption, source, note under it) gets squeezed out and moved to a slide of its own, which makes no sense without the chart. Keep a picture and its caption together (move or shrink them as one, as headings already stay with what follows), and check the Document view does the same at page breaks. Also: some charts come out without their title, and the margins around charts and diagrams are uneven; look at both in the Page, Slides and Document views
 - [ ] Chart inconsistencies seen in the 0.4.2 chart gallery, not fixed: mixed number formats on one axis ("$5,000" next to "$10k"), donut decimals, a unit shown twice (TWh), box plot styling, sankey values
 - [ ] Mermaid, as Mermaid draws them (left as is): journey diagrams scroll sideways at readable size, gitGraph commit labels are slanted, the tree view shows a "/" root
 - [x] Page awareness in the Slides and Document views (found for 0.4.2). Agents couldn't honour "make me a 5-page doc / 8-slide deck" or find "the chart on page 3": the views cut the page in the browser and nothing told the agent the result. Notes in `0.4.2-issue5-page-awareness.md`.
@@ -145,8 +145,6 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
   - [x] Skill: how slides and pages are cut, roughly what fits on a page, and to check the count against what the user asked for
   - [x] Quotes and the item rail's references carry their slide or page ("@exhibit(Deck #ab12cd, slide 4)"); the rail tells the agent what is on it from the kept outline
 - [ ] Let the agent write an exhibit's saved data (refresh numbers without a new version)
-- [ ] Look into "Continue in chat" from an exhibit, which also hooks up the New exhibit page (built 2026-11-10: an ask box and the four formats with previews, not connected; needs WorkSwarm to let a plugin start a chat)
-- [ ] An exhibit button that sends a message to the agent (may wait for the core feature)
 - [ ] Measuring: about ten test prompts scored with the 1 / 0.75 / 0.5 / 0 rubric, run before and after changes
 
 ## Exhibit quality
@@ -161,11 +159,9 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
 - [ ] Speed (2026-11-12):
   - [ ] The Exhibits Gallery is laggy (many live thumbnails?); measure what's slow first
   - [ ] Some interactive elements flash repeatedly while a value changes (sliders, inputs) instead of updating smoothly: likely whole charts or sections redrawn on every input event; find whether it's the kit (`exhibit.chart` called again per input) or the agent's code, then update in place or throttle
-- [ ] Test on a stronger model (2026-11-12): run the quality test suite (E1–E6, S1–S3) and the capstone on DeepSeek Pro or similar, to separate what's left that's the model (layout of improvised pictures, home-made cards, reasoning errors) from what's Exhibit's
 - [x] Freeform page width (0.4.1, 2026-11-13): DeepSeek Flash kept a fixed width, DeepSeek Pro once filled the window. Measured 13 recent freeform pages at 1600 px: 9 kept to 800–1152 px (mean about 934, median 952), 4 ran the full window. The skill now says one centered column, `max-width:960px` (the rounded average, and the Slides canvas width); the render check notes freeform pages whose content column is over 1040 px in its 1280 px window. Pages with under 600 characters of text (apps, games) aren't checked.
 - [x] Default font (0.4.1, 2026-11-13): 3 of 9 DeepSeek Pro pages set no font and showed in Times New Roman. Every page now gets the system sans (monospace for code) at zero specificity, first in `<head>`, so a page's own font wins.
 - [ ] Concrete design rules in the skill (lead with the answer, summarize before plotting, show each fact once)
-- [ ] In-app preview: a script-free snapshot in WorkSwarm's artifact panel with an "Open exhibit" link
 
 ## Small, any time
 
@@ -177,5 +173,3 @@ Same approach as `exhibit.chart`: the plugin supplies the tool with good default
 ## Set aside for now
 
 - Chinese labels on the Exhibits pages
-- Reporting platform issues to the WorkSwarm team, and the core proposal (exhibits in the artifact panel, MCP Apps)
-- Until Exhibit is a core feature: channels beyond the desktop and remote access, patch edits, lifecycle and scale, the remaining security gaps

@@ -30,7 +30,7 @@ Because the page may be shown as slides or as document pages, write it in sectio
 
 Edits to an existing exhibit never need `preset`: send `show` with its `exhibit_id` and `edits` (see step 4). It opens in the view the user last used.
 
-Unless the user asked for an exhibit, the question also offers "Answer in chat". So pass `chat_alternative` with `preset`: the concrete thing you'd give instead, in a few words, in the user's language, naming the file format when it's a file. For example "A bar chart of the scores as an SVG image", "A PDF report with the summary table" or "A Markdown table of the 20 tests with totals". Plain text is rarely the right alternative for a visual or interactive request.
+Unless the user asked for an exhibit, the question also offers "None of the above" (answer in chat). So pass `chat_alternative` with `preset`: the concrete thing you'd give in chat instead (you get it back if they pick that), in a few words, in the user's language, naming the file format when it's a file. For example "A bar chart of the scores as an SVG image", "A PDF report with the summary table" or "A Markdown table of the 20 tests with totals". Plain text is rarely the right alternative for a visual or interactive request.
 
 - If they pick a view, the result has `"preset"` and `"view"`, and you go on to write the page.
 - If the result starts with `[USER_CHOSE_CHAT]`, give them the alternative you offered, in chat, and don't call `exhibit` again for that request.

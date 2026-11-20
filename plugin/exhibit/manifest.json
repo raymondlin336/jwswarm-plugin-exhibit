@@ -1,23 +1,23 @@
 {
-  "version": "0.4.2",
+  "version": "0.4.3",
   "package_type": "plugin",
   "id": "exhibit",
   "name": "Exhibit",
-  "description": "Shows interactive exhibits the agent writes (dashboards, calculators, checklists, charts) in a sandboxed browser tab, with versions and saved data.",
+  "description": "Builds interactive HTML exhibits the agent writes (presentations, reports, demos, visualizations), opened in a sandboxed browser tab, with versions and saved data.",
   "display_name": {
     "en": "Exhibit",
     "zh": "展品"
   },
   "display_description": {
-    "en": "Lets WorkSwarm build exhibits for you: interactive pages like dashboards, calculators, checklists, forms, charts and small games, opened in a sandboxed browser tab. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back. Exhibits can't reach the internet or your files. Version 0.4.0 prototype.",
-    "zh": "版本 0.4.0 原型。让 WorkSwarm 为你制作展品：可交互的页面，如仪表盘、计算器、清单、表单、图表和小游戏，并在沙盒浏览器标签页中打开。展品会保留各个版本，并能保存你填写的内容，WorkSwarm 可以读回这些内容。展品无法访问互联网或你的文件。"
+    "en": "Lets WorkSwarm build exhibits for you: interactive HTML pages, suited for presentations, reports, demos, visualizations, etc, opened in a sandboxed browser tab. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back. Version 0.4.3.",
+    "zh": "让 WorkSwarm 为你制作展品：可交互的 HTML 页面，适合演示文稿、报告、演示、可视化等，并在沙盒浏览器标签页中打开。展品会保留各个版本，并能保存你填写的内容，WorkSwarm 可以读回这些内容。版本 0.4.3。"
   },
   "category": "Engineering",
   "source": "local",
   "avatar": "avatars/avatar.png",
   "default_init_input": {
-    "en": "Make me an interactive monthly budget planner I can fill in.",
-    "zh": "帮我做一个可以填写的交互式月度预算规划页面。"
+    "en": "Take these raw benchmarks results and make a comprehensive presentation with charts and graphs",
+    "zh": "把这些原始基准测试结果做成一份包含图表的完整演示文稿"
   },
   "tags": [
     {
@@ -35,16 +35,16 @@
   ],
   "quick_inputs": [
     {
-      "en": "Make me an interactive monthly budget planner I can fill in.",
-      "zh": "帮我做一个可以填写的交互式月度预算规划页面。"
+      "en": "Take these raw benchmarks results and make a comprehensive presentation with charts and graphs",
+      "zh": "把这些原始基准测试结果做成一份包含图表的完整演示文稿"
     },
     {
-      "en": "Build a packing checklist for my trip that remembers what I've checked off.",
-      "zh": "为我的旅行做一个打包清单，并记住我勾选了哪些。"
+      "en": "Make me an interactive workout tracker",
+      "zh": "帮我做一个交互式健身记录工具"
     },
     {
-      "en": "Turn this table into an interactive chart I can filter.",
-      "zh": "把这个表格变成一个可以筛选的交互式图表。"
+      "en": "Can you explain the different ways of boarding a plane and their relative speed using some interactive diagrams",
+      "zh": "能用一些交互式图示解释一下不同的登机方式以及它们各自的速度吗"
     }
   ],
   "skills": [
@@ -76,8 +76,8 @@
         "zh": "展品形式确认"
       },
       "display_description": {
-        "en": "Before a new exhibit is made, asks what kind you want: a document, slides or a freeform page (or an answer in chat, unless you asked for an exhibit).",
-        "zh": "在制作新展品前，询问你想要哪种形式：文档、幻灯片或自由页面（如果你没有明确要求展品，也可以选择在对话中回答）。"
+        "en": "Before a new exhibit is made, asks how you'd like to view it: Freeform, Slides or Document (you can change this later), or None of the above to get an answer in chat instead, unless you asked for an exhibit. It also confirms deletes and makes sure the agent has read the exhibit instructions.",
+        "zh": "在制作新展品前，询问你想以哪种方式查看：自由页面、幻灯片或文档（之后可以更改）；如果你没有明确要求展品，也可以选择“以上都不是”，直接在对话中回答。它还会确认删除操作，并确保智能体已读过展品说明。"
       }
     }
   ]

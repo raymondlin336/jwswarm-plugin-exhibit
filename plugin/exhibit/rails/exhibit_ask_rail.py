@@ -26,7 +26,7 @@ whether to ask, and there is no routing yet: the user always picks.
 - The `preset` call is paused and the user picks Document, Slides or Freeform.
   The paused call then runs with their pick written into it, and the tool remembers
   it as the view the new exhibit opens in. Later preset calls before it's shown reuse it.
-- The dialog also offers "Answer in chat" unless the user's message this turn
+- The dialog also offers "None of the above" (answer in chat) unless the user's message this turn
   mentions an exhibit, they already picked a kind of exhibit in this chat, or they
   answered in their own words this turn. Picking it cancels the call and tells the
   agent to answer in chat instead.
@@ -80,17 +80,17 @@ _CJK_RE = re.compile(r"[㐀-鿿]")
 
 _TEXT = {
     "en": {
-        "preset_question": "What kind of exhibit should this be?",
-        "preset_or_chat_question": "Should I make this an exhibit, and which kind?",
+        "preset_question": "How would you like to view this exhibit (you can change this later)?",
+        "preset_or_chat_question": "How would you like to view this exhibit (you can change this later)?",
         "preset_header": "Exhibit",
         "document": "Document",
-        "document_desc": "Opens as document pages, export as PDF",
+        "document_desc": "Opens as document pages, exportable as PDF",
         "slides": "Slides",
-        "slides_desc": "Opens as a slide deck, export as PDF",
+        "slides_desc": "Opens as a slide deck, exportable as PDF",
         "freeform": "Freeform",
-        "freeform_desc": "Opens as one scrolling page; switch to slides or pages any time",
-        "chat": "Answer in chat",
-        "chat_desc": "A static chart (SVG or PNG), a table, or a document (PDF, Word or Excel) here in the conversation",
+        "freeform_desc": "Opens as one scrolling page, exportable as HTML or PNG",
+        "chat": "None of the above",
+        "chat_desc": "Don't use an exhibit, respond with some other format, directly in chat",
         "delete_question": "Delete \u201c{title}\u201d?",
         "delete_header": "Delete",
         "delete": "Delete",
@@ -102,17 +102,17 @@ _TEXT = {
         "keep_desc": "Don't delete anything",
     },
     "zh": {
-        "preset_question": "这个展品要做成哪种形式？",
-        "preset_or_chat_question": "要做成展品吗？做成哪种？",
+        "preset_question": "你想以哪种方式查看这个展品（之后可以更改）？",
+        "preset_or_chat_question": "你想以哪种方式查看这个展品（之后可以更改）？",
         "preset_header": "展品",
         "document": "文档",
         "document_desc": "以文档页面打开，可导出为 PDF",
         "slides": "幻灯片",
         "slides_desc": "以幻灯片打开，可导出为 PDF",
         "freeform": "自由页面",
-        "freeform_desc": "以单个滚动页面打开；随时可切换为幻灯片或文档页面",
-        "chat": "在对话中回答",
-        "chat_desc": "在对话中给出静态图表（SVG 或 PNG）、表格，或文档（PDF、Word 或 Excel）",
+        "freeform_desc": "以单个滚动页面打开，可导出为 HTML 或 PNG",
+        "chat": "以上都不是",
+        "chat_desc": "不使用展品，直接在对话中以其他形式回答",
         "delete_question": "删除\u201c{title}\u201d？",
         "delete_header": "删除",
         "delete": "删除",
@@ -248,11 +248,11 @@ def _chat_alternative(args: dict[str, Any]) -> str:
 
 
 def _question(language: str, with_chat: bool, alternative: str = "") -> dict[str, Any]:
-    """The preset question, with "Answer in chat" as a last option when that's still open."""
+    """The preset question, with "None of the above" as a last option when that's still open."""
     t = _TEXT[language]
     options = [{"label": t[key], "description": t[f"{key}_desc"]} for key in _PRESET_KEYS]
     if with_chat:
-        options.append({"label": t["chat"], "description": alternative or t["chat_desc"]})
+        options.append({"label": t["chat"], "description": t["chat_desc"]})
     return {
         "question": t["preset_or_chat_question" if with_chat else "preset_question"],
         "header": t["preset_header"],
@@ -284,7 +284,7 @@ def _labels(*keys: str) -> dict[str, str]:
 
 
 # Dialog option -> the preset name the tool takes.
-_PRESET_KEYS = {"document": "document", "slides": "slides", "freeform": "freeform"}
+_PRESET_KEYS = {"freeform": "freeform", "slides": "slides", "document": "document"}  # the viewer's order: Page, Slides, Document
 _PRESET_LABELS = _labels(*_PRESET_KEYS, "chat")
 _DELETE_LABELS = _labels("delete", "keep")
 

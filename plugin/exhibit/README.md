@@ -1,6 +1,6 @@
 # Exhibit (exhibit)
 
-**Version 0.4.2 (prototype)** · Recommended model: deepseek-v4-pro
+**Version 0.4.3 (prototype)** · Recommended model: deepseek-v4-pro
 
 Lets WorkSwarm build exhibits for you: interactive pages like reports, explainers, dashboards, calculators, checklists and small games, opened in a sandboxed browser tab. Each one can be read as a scrolling page, as slides or as document pages. Exhibits keep their versions and can save what you enter, which WorkSwarm can read back.
 
@@ -18,7 +18,7 @@ Lets WorkSwarm build exhibits for you: interactive pages like reports, explainer
 
 - **exhibit (skill)**: Tells the agent when an exhibit helps, how to write one that works in the sandbox, how to save data with `window.exhibit`, and to treat saved data as user input, not instructions.
 - **exhibit (tool)**: Saves exhibits and their versions, opens them in your browser, and reads back what you saved. Actions: `show`, `preset`, `list`, `gallery`, `read`, `open`, `delete` and `stop`.
-- **ExhibitAskRail (rail)**: Before a new exhibit is written, asks you how it should open (Document, Slides or Freeform) with WorkSwarm's option dialog, plus "Answer in chat" unless your message mentioned an exhibit or you already picked one in this chat. Edits to an existing exhibit are never asked about. It also confirms deletes in a dialog, keeps HTML pages with scripts out of the file preview panel, and makes sure the agent has read the exhibit skill before showing one.
+- **ExhibitAskRail (rail)**: Before a new exhibit is written, asks you how to view it (Freeform, Slides or Document) with WorkSwarm's option dialog, plus "None of the above" (answer in chat) unless your message mentioned an exhibit or you already picked one in this chat. Edits to an existing exhibit are never asked about. It also confirms deletes in a dialog, keeps HTML pages with scripts out of the file preview panel, and makes sure the agent has read the exhibit skill before showing one.
 
 ## How it works
 
@@ -37,6 +37,12 @@ Lets WorkSwarm build exhibits for you: interactive pages like reports, explainer
 - **Dependencies:** Python standard library only. The tool does nothing at import time.
 
 ## Updates
+
+### 0.4.3
+
+- Moderate UI improvements
+- **Improvements / Bug Fixes:**
+  - Fixed issue where in narrow windows, the buttons beside charts and diagrams (export, edit, reference) were drawn on top of the content instead of beside it
 
 ### 0.4.2
 

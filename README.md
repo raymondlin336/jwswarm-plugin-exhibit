@@ -58,7 +58,7 @@ Similar to artifacts in Claude and canvas in ChatGPT and Gemini.
 
 ## Using it
 
-Ask for something that suits a page. Before a new exhibit, a dialog asks how it should open: Document, Slides, Freeform, or Answer in chat (if you didn't ask for an exhibit). This only picks the first view; you can switch any time. Edits to an existing exhibit aren't asked about and become new versions. The agent replies with a link that opens in your browser.
+Ask for something that suits a page. Before a new exhibit, a dialog asks how you'd like to view it: Freeform, Slides, Document, or None of the above to answer in chat (if you didn't ask for an exhibit). This only picks the first view; you can switch any time. Edits to an existing exhibit aren't asked about and become new versions. The agent replies with a link that opens in your browser.
 
 ![The format dialog in WorkSwarm](docs/format-dialog.webp)
 

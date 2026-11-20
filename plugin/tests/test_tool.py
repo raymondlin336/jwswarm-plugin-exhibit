@@ -94,6 +94,16 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertIn("<li>Sunscreen</li>", page)
         self.assertEqual(page.count("<!doctype html>"), 1)  # the stored page isn't wrapped twice
 
+    def test_item_rail_makes_room_in_a_narrow_window(self):
+        # 0.4.3: in a narrow window the content runs to the edge, and the rail's buttons were drawn on top of it.
+        # The page gets a gutter while there's no room (Page and Document views; the slides keep room at their
+        # sides), and the Document view fits its paper to the width left.
+        items = MOD._ITEMS_SCRIPT
+        self.assertIn('html[data-exhibit-rail-room]{padding-right:" + GUTTER + "px!important}', items)
+        self.assertIn("room ? right + GUTTER + NEED <= width : right + NEED > width", items)
+        self.assertIn("!window.__exhibitMoldView", items)
+        self.assertIn("scale = Math.min(1, (room - 32) / W);", MOD._DOCUMENT_SCRIPT)
+
     def test_show_edits_that_miss_save_nothing_and_say_why(self):
         xid = self.show(html="<p>Rent is 1500 a month.</p><p>Food</p><p>Food</p>")["exhibit_id"]
         cases = (
@@ -682,9 +692,9 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("Rail - Sales.html", headers.get("Content-Disposition", ""))
 
-    def test_new_exhibit_page_offers_formats_and_a_conversation(self):
-        # New exhibit opens a page: a box to ask WorkSwarm and the three ways an exhibit can open.
-        # Neither is connected (a plugin can't start a chat); both say so.
+    def test_new_exhibit_page_says_to_ask_in_a_chat(self):
+        # New exhibit opens a page with a box to ask WorkSwarm, not connected (a plugin can't start a chat). 0.4.3:
+        # the formats to start from were taken off (the chat's format question picks one).
         shown = self.show(title="Any")
         base = shown["url"].split("/e/")[0] + "/"
         viewer = _http(shown["url"])[2]
@@ -692,12 +702,16 @@ class ExhibitToolTests(unittest.TestCase):
         status, _, page = _http(base + "new")
         self.assertEqual(status, 200)
         self.assertIn('class="new-btn on"', page)
-        for name in ("Document", "Slides", "Freeform"):
-            self.assertIn(name, page)
-        self.assertNotIn("Charts &amp; Graphs", page)
-        self.assertEqual(page.count('class="card format-card"'), 3)
+        self.assertNotIn("Start from a format", page)
+        self.assertNotIn("format-card", page)
         self.assertIn('id="ask-text"', page)
-        self.assertIn("Not connected yet", page)
+        # 0.4.3: a large notice says to ask in a WorkSwarm chat, and the box is disabled and barred.
+        self.assertIn("To make a new exhibit, ask for it in a WorkSwarm chat.", page)
+        self.assertIn('class="unavailable" aria-disabled="true"', page)
+        self.assertIn('<textarea id="ask-text" rows="3" disabled', page)
+        self.assertIn('id="ask-start" type="button" disabled', page)
+        # The more-actions menu has an icon beside each item.
+        self.assertIn('{ label: "Rename", icon: config.menuIcons.rename,', _http(base)[2])
         self.assertEqual(_http(base + "preset/slides")[0], 404)  # no sample pages since 0.4.1
 
     def test_edit_data_panel_resizes_and_has_no_edited_dot(self):
@@ -1808,8 +1822,12 @@ class ExhibitToolTests(unittest.TestCase):
         self.assertNotIn("Third", pinned)
         self.assertNotIn("data-close", pinned)  # pinned rows have no close button
         self.assertLess(body.index('id="pinned-section"'), body.index('id="open-section"'))
-        self.assertEqual(body.count(f'data-pin="{ids[1]}" aria-pressed="true"'), 2)  # card and row
-        self.assertEqual(body.count(f'data-pin="{ids[2]}" aria-pressed="false"'), 2)
+        # A pin on its card and list row, and (0.4.3) on its rows in the column: Pinned, and Recently opened.
+        opened = MOD._load_tabs()
+        self.assertEqual(body.count(f'data-pin="{ids[1]}" aria-pressed="true"'), 3 + (ids[1] in opened))
+        self.assertEqual(body.count(f'data-pin="{ids[2]}" aria-pressed="false"'), 2 + (ids[2] in opened))
+        self.assertIn(f'data-pin="{ids[1]}"', pinned)
+        self.assertIn("function syncPins()", body)  # one handler for every pin button, on every page
         # The Pinned list shows on an exhibit's page too.
         self.assertIn('<div class="tab-list" id="pinned"><div class="row" title="Second">', _http(third["url"])[2])
         # Unpinning, deleting, and bad ids.
